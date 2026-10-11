@@ -75,7 +75,7 @@ class DemoLink : VentyLink {
 
     private fun applyWrite(p: ByteArray) {
         val mask = p.u8(1)
-        if (mask and VentyProtocol.MASK_TARGET != 0) {
+        if (mask and VentyProtocol.MASK_TARGET != 0 && p.u16(4) != state.targetTenths) {
             state = state.copy(targetTenths = p.u16(4), setpointReached = false)
             autoOffTicks = AUTO_OFF_SECONDS * TICKS_PER_SECOND
         }

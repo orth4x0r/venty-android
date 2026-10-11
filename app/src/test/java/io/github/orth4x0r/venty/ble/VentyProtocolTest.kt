@@ -46,6 +46,14 @@ class VentyProtocolTest {
     }
 
     @Test
+    fun `leaving boost writes mode and base target together`() {
+        assertArrayEquals(
+            padded(0x01, 0x22, 0, 0, 0x3A, 0x07, 0, 0, 0, 0, 0, 0x01),
+            VentyProtocol.setHeaterModeAndTarget(HeaterMode.On, 1850),
+        )
+    }
+
+    @Test
     fun `boost modes are heater modes 2 and 3`() {
         assertEquals(2, VentyProtocol.setHeaterMode(HeaterMode.Boost).u8(11))
         assertEquals(3, VentyProtocol.setHeaterMode(HeaterMode.SuperBoost).u8(11))

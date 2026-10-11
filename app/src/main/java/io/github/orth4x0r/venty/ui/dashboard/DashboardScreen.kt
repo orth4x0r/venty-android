@@ -19,6 +19,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import io.github.orth4x0r.venty.ui.AmbientBackground
+import io.github.orth4x0r.venty.ui.ColorFlash
 import io.github.orth4x0r.venty.ui.RollingNumber
 import io.github.orth4x0r.venty.ui.enterFromBelow
 import io.github.orth4x0r.venty.ui.pressScale
@@ -129,6 +130,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
             else -> 1f
         },
     )
+    ColorFlash(key = ambientPhase, color = ambientPhase?.color ?: VentyColors.Heat)
     Column(
         Modifier
             .fillMaxSize()
@@ -193,6 +195,15 @@ private fun Dashboard(
     val unit = Temperature.unit(f)
     val phase = HeaterPhase.of(s)
 
+    // A firm buzz the moment the Venty reaches temperature.
+    val haptics = LocalHapticFeedback.current
+    val reached = s.heaterMode.isHeating && s.setpointReached
+    var wasReached by remember { mutableStateOf(reached) }
+    LaunchedEffect(reached) {
+        if (reached && !wasReached) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        wasReached = reached
+    }
+
     Spacer(Modifier.height(8.dp))
     // The Venty may never report a live temperature (bytes 2-3 stay 0x8000), so when it doesn't,
     // the dial shows where the heater is aiming and the pill says whether it has got there.
@@ -204,7 +215,9 @@ private fun Dashboard(
         accent = phase.color,
         pulsing = phase == HeaterPhase.Heating,
         dimArc = current == null && !s.setpointReached,
-        modifier = Modifier.padding(horizontal = 4.dp),
+        ready = heating && s.setpointReached,
+        energy = s.heaterMode.code,
+        modifier = Modifier.padding(horizontal = 4.dp).enterFromBelow(0),
     ) {
         Text(
             when {
@@ -220,6 +233,7 @@ private fun Dashboard(
             value = Temperature.toDisplay(current ?: s.effectiveTargetTenths, f),
             unit = unit,
             color = if (current == null && !heating) VentyColors.Muted else MaterialTheme.colorScheme.onBackground,
+            glow = phase.color.takeIf { heating },
         )
         StatusPill(phase, s)
         if (s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
@@ -233,9 +247,11 @@ private fun Dashboard(
     }
 
     Spacer(Modifier.height(4.dp))
-    TargetCard(s, onTarget)
+    Box(Modifier.enterFromBelow(80)) { TargetCard(s, onTarget) }
     Spacer(Modifier.height(16.dp))
-    HeaterButton(on = s.heaterMode.isHeating, onToggle = { onMode(if (s.heaterMode.isHeating) HeaterMode.Off else HeaterMode.On) })
+    Box(Modifier.enterFromBelow(160)) {
+        HeaterButton(on = s.heaterMode.isHeating, onToggle = { onMode(if (s.heaterMode.isHeating) HeaterMode.Off else HeaterMode.On) })
+    }
     AnimatedVisibility(visible = s.heaterMode.isHeating, enter = expandVertically(), exit = shrinkVertically()) {
         Column {
             Spacer(Modifier.height(12.dp))
@@ -243,9 +259,9 @@ private fun Dashboard(
         }
     }
     Spacer(Modifier.height(16.dp))
-    BoostOffsetsCard(s, onBoost, onSuperBoost)
+    Box(Modifier.enterFromBelow(240)) { BoostOffsetsCard(s, onBoost, onSuperBoost) }
     Spacer(Modifier.height(16.dp))
-    InfoRow(s, info)
+    Column(Modifier.enterFromBelow(320)) { InfoRow(s, info) }
 }
 
 private enum class HeaterPhase(val label: String, val color: Color) {
@@ -304,7 +320,8 @@ private fun TargetCard(s: VentyStatus, onTarget: (Int) -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("Target", style = MaterialTheme.typography.labelLarge, color = VentyColors.Muted)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text("$shown°", style = MaterialTheme.typography.displaySmall)
+                    RollingNumber(shown, MaterialTheme.typography.displaySmall, MaterialTheme.colorScheme.onSurface)
+                    Text("°", style = MaterialTheme.typography.displaySmall)
                     Text(Temperature.unit(f), style = MaterialTheme.typography.titleMedium, color = VentyColors.Muted, modifier = Modifier.padding(start = 2.dp, bottom = 6.dp))
                 }
                 if (s.heaterMode == HeaterMode.Boost || s.heaterMode == HeaterMode.SuperBoost) {

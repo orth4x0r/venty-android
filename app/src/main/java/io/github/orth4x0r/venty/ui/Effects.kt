@@ -140,7 +140,10 @@ fun RollingNumber(value: Int, style: TextStyle, color: Color, modifier: Modifier
                             (slideOutVertically(tween(220)) { h -> -h * dir } + fadeOut(tween(160)))
                     },
                     label = "digit",
-                ) { c -> Text(c.toString(), style = style, color = color) }
+                ) { c ->
+                    // A brush in the style (gradient text) only shows if no plain colour overrides it.
+                    Text(c.toString(), style = style, color = if (style.brush != null) Color.Unspecified else color)
+                }
             }
         }
     }
@@ -153,7 +156,7 @@ private class Ember(var x: Float, var y: Float, var vy: Float, var life: Float, 
  * drawn on a Canvas with a frame clock, so nothing allocates per frame after warm-up.
  */
 @Composable
-fun Embers(active: Boolean, color: Color, modifier: Modifier = Modifier) {
+fun Embers(active: Boolean, color: Color, modifier: Modifier = Modifier, rate: Float = 1f) {
     val embers = remember { ArrayList<Ember>() }
     val frame = remember { Animatable(0f) }
     val level by animateFloatAsState(if (active) 1f else 0f, tween(900), label = "emberLevel")
@@ -166,7 +169,7 @@ fun Embers(active: Boolean, color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier) {
         frame.value // read to redraw every frame
         val rnd = Random
-        if (level > 0.05f && embers.size < 28 && rnd.nextFloat() < 0.35f * level) {
+        if (level > 0.05f && embers.size < (28 * rate).toInt() && rnd.nextFloat() < 0.35f * level * rate) {
             embers += Ember(
                 x = size.width * (0.3f + rnd.nextFloat() * 0.4f),
                 y = size.height * 0.9f,
@@ -209,4 +212,44 @@ fun ReadyBurst(trigger: Boolean, color: Color, modifier: Modifier = Modifier) {
             style = androidx.compose.ui.graphics.drawscope.Stroke(width = 10f * (1f - p) + 2f),
         )
     }
+}
+
+/** A full-screen wash of [color] that flashes in and fades out whenever [key] changes. */
+@Composable
+fun ColorFlash(key: Any?, color: Color, modifier: Modifier = Modifier) {
+    val flash = remember { Animatable(0f) }
+    val first = remember { BooleanArray(1) { true } }
+    LaunchedEffect(key) {
+        if (first[0]) { first[0] = false; return@LaunchedEffect }
+        flash.snapTo(0.28f)
+        flash.animateTo(0f, tween(700, easing = FastOutSlowInEasing))
+    }
+    Canvas(modifier.fillMaxSize()) {
+        val a = flash.value
+        if (a <= 0.001f) return@Canvas
+        drawRect(
+            Brush.radialGradient(
+                listOf(color.copy(alpha = a), color.copy(alpha = a * 0.3f), Color.Transparent),
+                center = Offset(size.width / 2, size.height * 0.3f),
+                radius = size.maxDimension,
+            ),
+        )
+    }
+}
+
+/** A brush for text that slowly sweeps a highlight across [base] colours. */
+@Composable
+fun shimmerBrush(colors: List<Color>, enabled: Boolean): Brush? {
+    if (!enabled) return null
+    val x by rememberInfiniteTransition(label = "textShimmer").animateFloat(
+        initialValue = -400f,
+        targetValue = 800f,
+        animationSpec = infiniteRepeatable(tween(2600, easing = LinearEasing), RepeatMode.Restart),
+        label = "textShimmerX",
+    )
+    return Brush.linearGradient(
+        colors = colors + Color.White + colors.reversed(),
+        start = Offset(x, 0f),
+        end = Offset(x + 400f, 200f),
+    )
 }

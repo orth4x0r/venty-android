@@ -83,6 +83,8 @@ class VentyController(context: Context) {
     @Volatile private var link: VentyLink? = null
     @Volatile private var lastStatusAt = 0L
     @Volatile private var deviceStatus: VentyStatus? = null
+    /** The base target while in plain heating mode, restored when leaving boost. */
+    @Volatile private var normalTarget: Int? = null
 
     // Optimistic values shown until the device reports them back, or until they expire.
     @Volatile private var pendingTarget: Pair<Int, Long>? = null
@@ -251,6 +253,8 @@ class VentyController(context: Context) {
     private fun onPacket(data: ByteArray) {
         VentyProtocol.parseStatus(data)?.let { s ->
             lastStatusAt = SystemClock.elapsedRealtime()
+            if (s.heaterMode != deviceStatus?.heaterMode) Log.i(TAG, "mode ${s.heaterMode}: ${data.toHex()}")
+            if (s.heaterMode == HeaterMode.On || s.heaterMode == HeaterMode.Off) normalTarget = s.targetTenths
             deviceStatus = s
             publish()
             return
@@ -298,6 +302,7 @@ class VentyController(context: Context) {
     /** Sets the base target temperature. Rapid calls are coalesced into one write. */
     fun setTarget(tenthsC: Int) {
         val value = tenthsC.coerceIn(VentyProtocol.MIN_TARGET, VentyProtocol.MAX_TARGET)
+        normalTarget = value
         pendingTarget = value to SystemClock.elapsedRealtime()
         publish()
         targetWriteJob?.cancel()
@@ -334,9 +339,17 @@ class VentyController(context: Context) {
 
     /** Boost and superboost are written as heater modes 2 and 3; see PROTOCOL.md for how sure we are. */
     fun setHeaterMode(mode: HeaterMode) {
+        val from = deviceStatus?.heaterMode
         pendingHeater = mode to SystemClock.elapsedRealtime()
         publish()
-        scope.launch { sendSafely(VentyProtocol.setHeaterMode(mode)) }
+        val leavingBoost = mode == HeaterMode.On && (from == HeaterMode.Boost || from == HeaterMode.SuperBoost)
+        val base = normalTarget ?: deviceStatus?.targetTenths
+        val packet = if (leavingBoost && base != null) {
+            VentyProtocol.setHeaterModeAndTarget(mode, base)
+        } else {
+            VentyProtocol.setHeaterMode(mode)
+        }
+        scope.launch { sendSafely(packet) }
     }
 
     private suspend fun sendSafely(packet: ByteArray) {

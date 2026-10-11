@@ -57,12 +57,15 @@ fun TemperatureDial(
     pulsing: Boolean,
     dimArc: Boolean = false,
     ready: Boolean = false,
+    /** 0 off, 1 normal heating, 2 boost, 3 superboost: drives how wild the effects get. */
+    energy: Int = 0,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val current by animateFloatAsState(
         fraction(currentTenths),
-        spring(stiffness = Spring.StiffnessVeryLow),
+        // A little overshoot makes the arc "ignite" when the heater turns on.
+        spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessVeryLow),
         label = "current",
     )
     val target by animateFloatAsState(fraction(targetTenths), spring(stiffness = Spring.StiffnessMediumLow), label = "target")
@@ -81,6 +84,13 @@ fun TemperatureDial(
     )
     val shimmerAlpha by animateFloatAsState(if (pulsing) 1f else 0f, tween(500), label = "shimmerAlpha")
     val glowAlpha = if (pulsing) pulse else if (ready) 0.2f else 0.12f
+    val coronaLevel by animateFloatAsState((energy.coerceIn(0, 3) / 3f), tween(800), label = "corona")
+    val corona by rememberInfiniteTransition(label = "coronaSpin").animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(if (energy >= 2) 2400 else 5200, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
+        label = "coronaAngle",
+    )
     val arcAlpha by animateFloatAsState(if (dimArc) 0.45f else 1f, tween(600), label = "arcAlpha")
 
     Box(modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
@@ -97,6 +107,26 @@ fun TemperatureDial(
                     radius = size.minDimension / 2,
                 ),
             )
+
+            // Corona: a rotating ring of light outside the track, stronger in boost.
+            if (coronaLevel > 0.01f) {
+                val r = radius + stroke * 1.4f
+                rotate(corona) {
+                    drawCircle(
+                        brush = Brush.sweepGradient(
+                            listOf(
+                                Color.Transparent,
+                                color.copy(alpha = 0.55f * coronaLevel),
+                                Color.Transparent,
+                                color.copy(alpha = 0.3f * coronaLevel),
+                                Color.Transparent,
+                            ),
+                        ),
+                        radius = r,
+                        style = Stroke(stroke * (0.25f + 0.35f * coronaLevel)),
+                    )
+                }
+            }
 
             // Track with tick marks every 10 °C.
             drawArc(Color(0xFF2E2622), START_ANGLE, SWEEP, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
@@ -170,7 +200,12 @@ fun TemperatureDial(
             drawCircle(Color(0xFF0F0D0C), radius = stroke * 0.85f, center = marker)
             drawCircle(Color.White, radius = stroke * 0.85f, center = marker, style = Stroke(stroke * 0.28f))
         }
-        io.github.orth4x0r.venty.ui.Embers(active = pulsing, color = color, modifier = Modifier.fillMaxSize())
+        io.github.orth4x0r.venty.ui.Embers(
+            active = pulsing || energy >= 2,
+            color = color,
+            rate = when (energy) { 3 -> 2.6f; 2 -> 1.8f; else -> 1f },
+            modifier = Modifier.fillMaxSize(),
+        )
         io.github.orth4x0r.venty.ui.ReadyBurst(trigger = ready, color = color, modifier = Modifier.fillMaxSize())
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
             content()
@@ -179,10 +214,18 @@ fun TemperatureDial(
 }
 
 @Composable
-fun BigTemperature(value: Int, unit: String, color: Color) {
+fun BigTemperature(value: Int, unit: String, color: Color, glow: Color? = null) {
     val animated by androidx.compose.animation.animateColorAsState(color, tween(500), label = "bigTempColor")
+    val brush = io.github.orth4x0r.venty.ui.shimmerBrush(
+        listOf(glow ?: animated, androidx.compose.ui.graphics.lerp(glow ?: animated, Color.White, 0.5f)),
+        enabled = glow != null,
+    )
+    val base = MaterialTheme.typography.displayLarge
+    val style = if (brush != null) {
+        base.copy(brush = brush, shadow = androidx.compose.ui.graphics.Shadow(glow!!.copy(alpha = 0.6f), blurRadius = 28f))
+    } else base
     Row(verticalAlignment = Alignment.Top) {
-        io.github.orth4x0r.venty.ui.RollingNumber(value, MaterialTheme.typography.displayLarge, animated)
+        io.github.orth4x0r.venty.ui.RollingNumber(value, style, animated)
         Text("°$unit", style = MaterialTheme.typography.headlineMedium, color = animated.copy(alpha = 0.7f), modifier = Modifier.padding(top = 14.dp))
     }
 }

@@ -60,6 +60,16 @@ object VentyProtocol {
         it[11] = mode.code.toByte()
     }
 
+    /**
+     * Sets the heater mode and the base target in one write. Used to leave boost: on a real
+     * Venty, writing mode 1 alone left it at the boosted temperature.
+     */
+    fun setHeaterModeAndTarget(mode: HeaterMode, tenthsC: Int): ByteArray = packet(CMD_STATUS).also {
+        it[1] = (MASK_HEATER or MASK_TARGET).toByte()
+        it.putU16(4, tenthsC.coerceIn(MIN_TARGET, MAX_TARGET))
+        it[11] = mode.code.toByte()
+    }
+
     /** Decodes a `0x01` notification, or returns null if [data] is not a status packet. */
     fun parseStatus(data: ByteArray): VentyStatus? {
         if (data.size < 15 || data[0] != CMD_STATUS) return null
