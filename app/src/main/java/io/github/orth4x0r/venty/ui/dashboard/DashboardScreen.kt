@@ -156,9 +156,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.orth4x0r.venty.ble.ConnectionState
 import io.github.orth4x0r.venty.ble.DeviceInfo
+import io.github.orth4x0r.venty.ble.DeviceKind
+import io.github.orth4x0r.venty.ui.Embers
 import io.github.orth4x0r.venty.ble.HeaterMode
 import io.github.orth4x0r.venty.ble.VentyController
-import io.github.orth4x0r.venty.ble.VentyProtocol
 import io.github.orth4x0r.venty.ble.VentyStatus
 import io.github.orth4x0r.venty.ui.Temperature
 import io.github.orth4x0r.venty.ui.theme.VentyColors
@@ -179,12 +180,14 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     val history by app.sessions.history.collectAsStateWithLifecycle()
     val lifetimePuffs by app.sessions.lifetimePuffs.collectAsStateWithLifecycle()
     val batterySamples by app.battery.samples.collectAsStateWithLifecycle()
+    val kind by controller.kind.collectAsStateWithLifecycle()
+    val pump by controller.pump.collectAsStateWithLifecycle()
 
     val name = when (connection) {
         is ConnectionState.Connected -> connection.name
         is ConnectionState.Connecting -> connection.name
         is ConnectionState.Reconnecting -> connection.name
-        else -> "Venty"
+        else -> kind.displayName
     }
 
     // Keep the screen on while the heater runs, on every page, so the status stays in view.
@@ -285,6 +288,8 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                 color = ambientPhase?.color ?: VentyColors.Boost,
             )
             ColorFlash(key = ambientPhase, color = ambientPhase?.color ?: VentyColors.Heat)
+            // The Volcano's pump sends a stream of air bubbles up the screen.
+            if (kind.hasPump) Embers(active = pump, color = VentyColors.Air, modifier = Modifier.fillMaxSize(), rate = 1.6f)
 
             AnimatedContent(
                 targetState = page,
@@ -317,6 +322,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                 Box(Modifier.fillMaxSize().then(scrub)) {
                     when (target) {
                         Page.Settings -> SettingsScreen(
+                            kind = kind,
                             status = status,
                             deviceSettings = deviceSettings,
                             firmware = info.firmware,
@@ -349,6 +355,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                         ) {
                             TopBar(
                                 name = name,
+                                kind = kind,
                                 status = status,
                                 demo = (connection as? ConnectionState.Connected)?.demo == true,
                                 onHistory = { openPage(Page.History) },
@@ -388,6 +395,9 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             } else {
                                 Dashboard(
                                     s = s,
+                                    kind = kind,
+                                    pump = pump,
+                                    onPump = controller::setPump,
                                     info = info,
                                     live = live,
                                     presets = presets,
@@ -531,6 +541,9 @@ private fun View.detent(heavy: Boolean) {
 @Composable
 private fun Dashboard(
     s: VentyStatus,
+    kind: DeviceKind,
+    pump: Boolean,
+    onPump: (Boolean) -> Unit,
     info: DeviceInfo,
     live: LiveSession?,
     presets: List<Preset>,
@@ -585,7 +598,7 @@ private fun Dashboard(
         } else {
             val d = Temperature.toDisplay(t, f)
             // Where each preset sits on the dial, which can't go past the top of the range.
-            fun onDial(p: Preset) = (p.tenthsC + boostDelta).coerceAtMost(VentyProtocol.MAX_TARGET)
+            fun onDial(p: Preset) = (p.tenthsC + boostDelta).coerceIn(kind.targetRange)
             fun gap(p: Preset) = abs(Temperature.toDisplay(onDial(p), f) - d)
             val held = snapped?.takeIf { it in presets && gap(it) <= 2 }
             val closest = presets
@@ -605,7 +618,7 @@ private fun Dashboard(
                 snapped = magnet
                 dragTenths = onDial(magnet)
             } else {
-                val atEnd = t <= VentyProtocol.MIN_TARGET || t >= VentyProtocol.MAX_TARGET
+                val atEnd = t <= kind.minTarget || t >= kind.maxTarget
                 if (d != prev) view.detent(heavy = d % 10 == 0 || atEnd)
                 snapped = null
                 dragTenths = t
@@ -631,6 +644,7 @@ private fun Dashboard(
         energy = s.heaterMode.code,
         modifier = Modifier.padding(horizontal = 4.dp).enterFromBelow(0, intro),
         onDrag = onDialDrag,
+        range = kind.targetRange,
     ) {
         Text(
             when {
@@ -674,7 +688,7 @@ private fun Dashboard(
     }
 
     LiveSessionStrip(live, Modifier.padding(bottom = 12.dp))
-    Box(Modifier.enterFromBelow(80, intro)) { TargetCard(s, onTarget) }
+    Box(Modifier.enterFromBelow(80, intro)) { TargetCard(s, kind, onTarget) }
     Spacer(Modifier.height(2.dp))
     Box(Modifier.enterFromBelow(120, intro)) { PresetsRow(presets, s, onTarget, onAddPreset, onRemovePreset) }
     Spacer(Modifier.height(6.dp))
@@ -686,18 +700,26 @@ private fun Dashboard(
             onMode(if (turningOn) HeaterMode.On else HeaterMode.Off)
         })
     }
-    AnimatedVisibility(visible = s.heaterMode.isHeating, enter = expandVertically(), exit = shrinkVertically()) {
-        Column {
-            Spacer(Modifier.height(12.dp))
-            BoostSelector(s, onMode)
+    if (kind.hasPump) {
+        Spacer(Modifier.height(12.dp))
+        Box(Modifier.enterFromBelow(200, intro)) { PumpButton(pump, onPump) }
+    }
+    if (kind.hasBoost) {
+        AnimatedVisibility(visible = s.heaterMode.isHeating, enter = expandVertically(), exit = shrinkVertically()) {
+            Column {
+                Spacer(Modifier.height(12.dp))
+                BoostSelector(s, onMode)
+            }
         }
+        Spacer(Modifier.height(16.dp))
+        Box(Modifier.enterFromBelow(240, intro)) { BoostOffsetsCard(s, onBoost, onSuperBoost) }
+    }
+    if (kind.hasBattery) {
+        Spacer(Modifier.height(16.dp))
+        Box(Modifier.enterFromBelow(280, intro)) { BatteryCard(s, batterySamples) }
     }
     Spacer(Modifier.height(16.dp))
-    Box(Modifier.enterFromBelow(240, intro)) { BoostOffsetsCard(s, onBoost, onSuperBoost) }
-    Spacer(Modifier.height(16.dp))
-    Box(Modifier.enterFromBelow(280, intro)) { BatteryCard(s, batterySamples) }
-    Spacer(Modifier.height(16.dp))
-    Column(Modifier.enterFromBelow(320, intro)) { InfoRow(s, info, lifetimePuffs) }
+    Column(Modifier.enterFromBelow(320, intro)) { InfoRow(s, info, lifetimePuffs, kind) }
 }
 
 private enum class HeaterPhase(val label: String) {
@@ -1097,10 +1119,10 @@ private fun StatusPill(phase: HeaterPhase, s: VentyStatus) {
 }
 
 @Composable
-private fun TargetCard(s: VentyStatus, onTarget: (Int) -> Unit) {
+private fun TargetCard(s: VentyStatus, kind: DeviceKind, onTarget: (Int) -> Unit) {
     val f = s.fahrenheit
-    val minDisplay = Temperature.toDisplay(VentyProtocol.MIN_TARGET, f)
-    val maxDisplay = Temperature.toDisplay(VentyProtocol.MAX_TARGET, f)
+    val minDisplay = Temperature.toDisplay(kind.minTarget, f)
+    val maxDisplay = Temperature.toDisplay(kind.maxTarget, f)
     val target = Temperature.toDisplay(s.targetTenths, f)
 
     // While the slider is dragged we show the finger's value and only write on release.
@@ -1348,9 +1370,18 @@ private fun OffsetRow(label: String, value: Int, color: Color, onChange: (Int) -
 }
 
 @Composable
-private fun InfoRow(s: VentyStatus, info: DeviceInfo, lifetimePuffs: Int) {
+private fun InfoRow(s: VentyStatus, info: DeviceInfo, lifetimePuffs: Int, kind: DeviceKind) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        InfoTile("Lifetime puffs", "$lifetimePuffs", Modifier.weight(1f))
+        // The Volcano has no puff sensor to count with, so show the target range instead.
+        if (kind == DeviceKind.Volcano) {
+            InfoTile(
+                "Range",
+                "${Temperature.toDisplay(kind.minTarget, s.fahrenheit)}–${Temperature.toDisplay(kind.maxTarget, s.fahrenheit)}°",
+                Modifier.weight(1f),
+            )
+        } else {
+            InfoTile("Lifetime puffs", "$lifetimePuffs", Modifier.weight(1f))
+        }
         InfoTile(
             "Heater time",
             info.heaterMinutes?.let { "${it / 60} h ${it % 60} m" } ?: "–",
@@ -1383,6 +1414,7 @@ private fun InfoTile(label: String, value: String, modifier: Modifier = Modifier
 @Composable
 private fun TopBar(
     name: String,
+    kind: DeviceKind,
     status: VentyStatus?,
     demo: Boolean,
     onHistory: () -> Unit,
@@ -1400,7 +1432,7 @@ private fun TopBar(
                 color = VentyColors.Muted,
             )
         }
-        if (status != null) BatteryBadge(status.battery, status.charging)
+        if (status != null && kind.hasBattery) BatteryBadge(status.battery, status.charging)
         IconButton(onClick = onHistory) { Icon(Icons.Rounded.BarChart, "History") }
         IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
         Box {
@@ -1408,7 +1440,7 @@ private fun TopBar(
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(text = { Text("Disconnect") }, onClick = { menu = false; onDisconnect() })
                 if (!demo) {
-                    DropdownMenuItem(text = { Text("Forget this Venty") }, onClick = { menu = false; onForget() })
+                    DropdownMenuItem(text = { Text("Forget this ${kind.displayName}") }, onClick = { menu = false; onForget() })
                 }
             }
         }

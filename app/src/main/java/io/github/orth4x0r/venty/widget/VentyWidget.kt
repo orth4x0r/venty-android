@@ -12,6 +12,7 @@ import io.github.orth4x0r.venty.MainActivity
 import io.github.orth4x0r.venty.R
 import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.ble.ConnectionState
+import io.github.orth4x0r.venty.ble.DeviceKind
 import io.github.orth4x0r.venty.ble.HeaterMode
 import io.github.orth4x0r.venty.ble.VentyStatus
 import io.github.orth4x0r.venty.ui.Temperature
@@ -31,7 +32,7 @@ class VentyWidgetProvider : AppWidgetProvider() {
         val connected = controller.connection.value is ConnectionState.Connected
         appWidgetManager.updateAppWidget(
             appWidgetIds,
-            VentyWidget.render(context, controller.status.value, connected),
+            VentyWidget.render(context, controller.status.value, connected, controller.kind.value),
         )
     }
 
@@ -56,15 +57,15 @@ object VentyWidget {
     private val BOOST = Color.parseColor("#FF4D4D")
     private val OFF = Color.parseColor("#9C8F86")
 
-    fun update(context: Context, status: VentyStatus?, connected: Boolean) {
+    fun update(context: Context, status: VentyStatus?, connected: Boolean, kind: DeviceKind) {
         val app = context.applicationContext
         val manager = AppWidgetManager.getInstance(app)
         val ids = manager.getAppWidgetIds(ComponentName(app, VentyWidgetProvider::class.java))
         if (ids.isEmpty()) return
-        manager.updateAppWidget(ids, render(app, status, connected))
+        manager.updateAppWidget(ids, render(app, status, connected, kind))
     }
 
-    internal fun render(context: Context, status: VentyStatus?, connected: Boolean): RemoteViews {
+    internal fun render(context: Context, status: VentyStatus?, connected: Boolean, kind: DeviceKind): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.widget_venty)
         // Anything other than a live status is shown as placeholders.
         val live: VentyStatus? = if (connected) status else null
@@ -100,7 +101,15 @@ object VentyWidget {
         views.setTextViewText(R.id.widget_state, context.getString(labelRes))
         views.setTextColor(R.id.widget_state, color)
 
-        val battery = live?.let { context.getString(R.string.widget_battery, it.battery) }
+        // A Volcano has no battery, but it does report its live temperature.
+        val battery = live?.let {
+            val now = it.currentTenths
+            when {
+                kind.hasBattery -> context.getString(R.string.widget_battery, it.battery)
+                now != null -> context.getString(R.string.widget_now, Temperature.toDisplay(now, it.fahrenheit))
+                else -> context.getString(R.string.widget_placeholder)
+            }
+        }
         views.setTextViewText(
             R.id.widget_battery,
             battery ?: context.getString(R.string.widget_battery_unknown),

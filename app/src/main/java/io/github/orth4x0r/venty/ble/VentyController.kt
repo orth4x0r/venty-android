@@ -36,7 +36,12 @@ private const val WRITE_DEBOUNCE_MS = 250L
 // for the write to land; longer makes refused changes flicker between the two values.
 private const val PENDING_HOLD_MS = 1_100L
 
-data class FoundDevice(val address: String, val name: String, val rssi: Int)
+data class FoundDevice(
+    val address: String,
+    val name: String,
+    val rssi: Int,
+    val kind: DeviceKind = DeviceKind.fromName(name),
+)
 
 sealed interface ConnectionState {
     data object Idle : ConnectionState
@@ -50,7 +55,7 @@ sealed interface ConnectionState {
 data class DeviceInfo(val firmware: String? = null, val heaterMinutes: Int? = null)
 
 /**
- * Owns the connection to the Venty: scanning, connecting, the 500 ms status poll, automatic
+ * Owns the connection to the Venty or Volcano: scanning, connecting, the 500 ms status poll, automatic
  * reconnects and outgoing commands. Lives for the whole process (see VentyApp).
  */
 @SuppressLint("MissingPermission") // The UI only calls in here once Bluetooth permissions are granted.
@@ -77,6 +82,15 @@ class VentyController(context: Context) {
 
     private val _info = MutableStateFlow(DeviceInfo())
     val info: StateFlow<DeviceInfo> = _info.asStateFlow()
+
+    /** What kind of device the current (or last) connection is to. */
+    private val _kind = MutableStateFlow(DeviceKind.Venty)
+    val kind: StateFlow<DeviceKind> = _kind.asStateFlow()
+
+    /** Whether the Volcano's pump is running. Always false on a Venty. */
+    private val _pump = MutableStateFlow(false)
+    val pump: StateFlow<Boolean> = _pump.asStateFlow()
+    @Volatile private var pendingPump: Pair<Boolean, Long>? = null
 
     private var sessionJob: Job? = null
     private var scanJob: Job? = null
@@ -115,10 +129,13 @@ class VentyController(context: Context) {
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val name = result.scanRecord?.deviceName ?: result.device.name
-                val advertisesService = result.scanRecord?.serviceUuids
-                    ?.contains(ParcelUuid(VentyProtocol.SERVICE_UUID)) == true
-                if (!VentyProtocol.isVentyName(name) && !advertisesService) return
-                found[result.device.address] = FoundDevice(result.device.address, name ?: "Venty", result.rssi)
+                val services = result.scanRecord?.serviceUuids.orEmpty()
+                val kind = when {
+                    VolcanoProtocol.isVolcanoName(name) || ParcelUuid(VolcanoProtocol.STATE_SERVICE) in services -> DeviceKind.Volcano
+                    VentyProtocol.isVentyName(name) || ParcelUuid(VentyProtocol.SERVICE_UUID) in services -> DeviceKind.Venty
+                    else -> return
+                }
+                found[result.device.address] = FoundDevice(result.device.address, name ?: kind.displayName, result.rssi, kind)
                 _connection.update { current ->
                     if (current is ConnectionState.Scanning) {
                         current.copy(found = found.values.sortedByDescending { it.rssi })
@@ -131,7 +148,7 @@ class VentyController(context: Context) {
             }
         }
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        // No ScanFilter: the Venty may not put the service UUID in its advertisement, so we match by name too.
+        // No ScanFilter: the devices may not put their service UUID in the advertisement, so we match by name too.
         scanner.startScan(null, settings, callback)
         scanJob = scope.launch {
             try {
@@ -139,7 +156,7 @@ class VentyController(context: Context) {
                 _connection.update {
                     when {
                         it !is ConnectionState.Scanning -> it
-                        it.found.isEmpty() -> ConnectionState.Failed("No Venty found. Is it switched on and nearby?")
+                        it.found.isEmpty() -> ConnectionState.Failed("No Venty or Volcano found. Is it switched on and nearby?")
                         else -> it.copy(active = false)
                     }
                 }
@@ -158,24 +175,36 @@ class VentyController(context: Context) {
     // ---- Sessions -------------------------------------------------------------------------
 
     fun connect(device: FoundDevice) {
-        prefs.edit().putString(KEY_ADDRESS, device.address).putString(KEY_NAME, device.name).apply()
-        startSession(device.name, demo = false) {
+        prefs.edit()
+            .putString(KEY_ADDRESS, device.address)
+            .putString(KEY_NAME, device.name)
+            .putString(KEY_KIND, device.kind.name)
+            .apply()
+        startSession(device.name, demo = false, kind = device.kind) {
             val bt = adapter?.getRemoteDevice(device.address) ?: throw LinkLostException("Bluetooth unavailable")
             if (!bluetoothEnabled) throw LinkLostException("Bluetooth is off")
-            GattLink.connect(appContext, bt)
+            when (device.kind) {
+                DeviceKind.Venty -> GattLink.connect(appContext, bt)
+                DeviceKind.Volcano -> GattVolcanoLink.connect(appContext, bt)
+            }
         }
     }
 
-    /** Reconnects to the last Venty used, if there is one. Returns false if there isn't. */
+    /** Reconnects to the last device used, if there is one. Returns false if there isn't. */
     fun connectToLast(): Boolean {
         val address = prefs.getString(KEY_ADDRESS, null) ?: return false
         val name = prefs.getString(KEY_NAME, null) ?: "Venty"
+        val kind = prefs.getString(KEY_KIND, null)
+            ?.let { k -> DeviceKind.entries.firstOrNull { it.name == k } }
+            ?: DeviceKind.fromName(name)
         if (adapter == null || !bluetoothEnabled) return false
-        connect(FoundDevice(address, name, 0))
+        connect(FoundDevice(address, name, 0, kind))
         return true
     }
 
-    fun startDemo() = startSession("Demo Venty", demo = true) { DemoLink() }
+    fun startDemo() = startSession("Demo Venty", demo = true, kind = DeviceKind.Venty) { DemoLink() }
+
+    fun startVolcanoDemo() = startSession("Demo Volcano", demo = true, kind = DeviceKind.Volcano) { DemoVolcanoLink() }
 
     fun forgetDevice() {
         prefs.edit().clear().apply()
@@ -192,11 +221,14 @@ class VentyController(context: Context) {
         _status.value = null
         _info.value = DeviceInfo()
         _deviceSettings.value = null
+        _pump.value = false
+        pendingPump = null
         _connection.value = ConnectionState.Idle
     }
 
-    private fun startSession(name: String, demo: Boolean, open: suspend () -> VentyLink) {
+    private fun startSession(name: String, demo: Boolean, kind: DeviceKind, open: suspend () -> VentyLink) {
         disconnect()
+        _kind.value = kind
         _connection.value = ConnectionState.Connecting(name)
         sessionJob = scope.launch {
             var attempt = 0
@@ -235,6 +267,8 @@ class VentyController(context: Context) {
         // Forget the previous link's status so "Connected" waits for this link to answer.
         deviceStatus = null
         launch { l.incoming.collect(::onPacket) }
+        // A Volcano reports decoded values instead of status packets; incoming only fails on a drop.
+        if (l is VolcanoLink) launch { l.state.collect(::onVolcano) }
 
         lastStatusAt = SystemClock.elapsedRealtime()
         l.send(VentyProtocol.readFirmware())
@@ -252,7 +286,7 @@ class VentyController(context: Context) {
                 _connection.value = ConnectionState.Connected(name, demo)
             }
             if (SystemClock.elapsedRealtime() - lastStatusAt > STALE_AFTER_MS) {
-                throw LinkLostException("Venty stopped answering")
+                throw LinkLostException("${_kind.value.displayName} stopped answering")
             }
             tick++
             l.send(if (tick % USAGE_EVERY_TICKS == 0) VentyProtocol.readUsage() else VentyProtocol.pollStatus())
@@ -272,6 +306,28 @@ class VentyController(context: Context) {
         VentyProtocol.parseFirmware(data)?.let { fw -> _info.update { it.copy(firmware = fw) }; return }
         VentyProtocol.parseHeaterMinutes(data)?.let { m -> _info.update { it.copy(heaterMinutes = m) }; return }
         Log.d(TAG, "unhandled packet ${data.toHex()}")
+    }
+
+    private fun onVolcano(v: VolcanoState) {
+        // Nothing to show until the first full read lands.
+        if (!v.loaded) return
+        lastStatusAt = SystemClock.elapsedRealtime()
+        val s = v.toStatus()
+        if (s.heaterMode != deviceStatus?.heaterMode) Log.i(TAG, "volcano heater ${s.heaterMode}")
+        normalTarget = s.targetTenths
+        deviceStatus = s
+        _deviceSettings.value = v.toSettings()
+        _info.value = DeviceInfo(firmware = v.firmware, heaterMinutes = v.heaterMinutes)
+        val pump = pendingPump
+        _pump.value = when {
+            pump == null -> v.pump
+            v.pump == pump.first || lastStatusAt - pump.second > PENDING_HOLD_MS -> {
+                pendingPump = null
+                v.pump
+            }
+            else -> pump.first
+        }
+        publish()
     }
 
     /** Merges the device's status with pending user changes and publishes it to the UI. */
@@ -339,7 +395,7 @@ class VentyController(context: Context) {
 
     /** Sets the base target temperature. Rapid calls are coalesced into one write. */
     fun setTarget(tenthsC: Int) {
-        val value = tenthsC.coerceIn(VentyProtocol.MIN_TARGET, VentyProtocol.MAX_TARGET)
+        val value = tenthsC.coerceIn(_kind.value.targetRange)
         normalTarget = value
         pendingTarget = value to SystemClock.elapsedRealtime()
         publish()
@@ -347,7 +403,7 @@ class VentyController(context: Context) {
         targetWriteJob = scope.launch {
             delay(WRITE_DEBOUNCE_MS)
             pendingTarget = value to SystemClock.elapsedRealtime()
-            sendSafely(VentyProtocol.setTarget(value))
+            sendSafely(VentyProtocol.setTarget(value, max = _kind.value.maxTarget))
         }
     }
 
@@ -428,6 +484,21 @@ class VentyController(context: Context) {
 
     fun findMyDevice() = send(VentyProtocol.findMyDevice())
 
+    /** Starts or stops the Volcano's pump. Does nothing on a Venty. */
+    fun setPump(on: Boolean) {
+        val l = link as? VolcanoLink ?: return
+        pendingPump = on to SystemClock.elapsedRealtime()
+        _pump.value = on
+        scope.launch {
+            try {
+                l.setPump(on)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.w(TAG, "pump write failed", e)
+            }
+        }
+    }
+
     private fun send(packet: ByteArray) {
         scope.launch { sendSafely(packet) }
     }
@@ -455,5 +526,6 @@ class VentyController(context: Context) {
     private companion object {
         const val KEY_ADDRESS = "address"
         const val KEY_NAME = "name"
+        const val KEY_KIND = "kind"
     }
 }

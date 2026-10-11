@@ -36,7 +36,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * Keeps the Venty connection alive while the app is in the background and shows a live
+ * Keeps the Venty or Volcano connection alive while the app is in the background and shows a live
  * notification with heater controls. Also posts the "ready" and low-battery alerts.
  */
 class VentyService : Service() {
@@ -65,15 +65,18 @@ class VentyService : Service() {
             val session = app.sessions.live
                 .map { l -> l?.let { SessionKey(it.startMs, heatUpPercent(it)) } }
                 .distinctUntilChanged()
-            // Ignore the auto-off countdown so the notification isn't rebuilt every second.
-            combine(app.controller.status, app.controller.connection, session) { s, c, l -> Triple(s?.copy(autoOffSeconds = 0), c, l) }
+            // Ignore the auto-off countdown so the notification isn't rebuilt every second, and
+            // round a Volcano's live temperature to whole degrees for the same reason.
+            combine(app.controller.status, app.controller.connection, session, app.controller.pump) { s, c, l, p ->
+                Snapshot(s?.copy(autoOffSeconds = 0, currentTenths = s.currentTenths?.let { it / 10 * 10 }), c, l, p)
+            }
                 .distinctUntilChanged()
-                .collect { (s, c, l) ->
+                .collect { (s, c, l, p) ->
                 if (c is ConnectionState.Idle || c is ConnectionState.Failed || c is ConnectionState.Scanning) {
                     stopSelf()
                     return@collect
                 }
-                notify(ONGOING_ID, buildOngoing(s, c, l))
+                notify(ONGOING_ID, buildOngoing(s, c, l, p))
                 checkAlerts(s)
             }
         }
@@ -85,6 +88,7 @@ class VentyService : Service() {
         when (intent?.action) {
             ACTION_TOGGLE -> controller.setHeaterMode(if (s?.heaterMode?.isHeating == true) HeaterMode.Off else HeaterMode.On)
             ACTION_BOOST -> controller.setHeaterMode(if (s?.heaterMode == HeaterMode.Boost) HeaterMode.On else HeaterMode.Boost)
+            ACTION_PUMP -> controller.setPump(!controller.pump.value)
             ACTION_DISCONNECT -> controller.disconnect()
         }
         return START_NOT_STICKY
@@ -102,18 +106,20 @@ class VentyService : Service() {
 
     private fun checkAlerts(s: VentyStatus?) {
         if (s == null) return
+        val kind = app.controller.kind.value
         val prefs = app.prefs.app.value
         val ready = s.heaterMode.isHeating && s.setpointReached
         if (ready && wasReady == false && prefs.readyNotification && !appInForeground()) {
             val t = Temperature.toDisplay(s.effectiveTargetTenths, s.fahrenheit)
             notify(
                 ALERT_ID,
-                alert("Your Venty is ready", "At $t°${Temperature.unit(s.fahrenheit)}. Enjoy.").build(),
+                alert("Your ${kind.displayName} is ready", "At $t°${Temperature.unit(s.fahrenheit)}. Enjoy.").build(),
             )
         }
         wasReady = ready
 
         val threshold = prefs.lowBatteryAlertPercent
+        if (!kind.hasBattery) return
         if (threshold > 0 && !s.charging && s.battery <= threshold && !lowBatteryAlerted) {
             lowBatteryAlerted = true
             notify(BATTERY_ID, alert("Venty battery low", "${s.battery}% left. Time to charge.").build())
@@ -133,11 +139,12 @@ class VentyService : Service() {
         .setAutoCancel(true)
         .setContentIntent(openApp())
 
-    private fun buildOngoing(s: VentyStatus?, c: ConnectionState, session: SessionKey? = null): Notification {
+    private fun buildOngoing(s: VentyStatus?, c: ConnectionState, session: SessionKey? = null, pump: Boolean = false): Notification {
+        val kind = app.controller.kind.value
         val title: String
         val text: String
         if (s == null || c !is ConnectionState.Connected) {
-            title = if (c is ConnectionState.Reconnecting) "Reconnecting to your Venty" else "Connecting to your Venty"
+            title = if (c is ConnectionState.Reconnecting) "Reconnecting to your ${kind.displayName}" else "Connecting to your ${kind.displayName}"
             text = "Keep it switched on and nearby"
         } else {
             val unit = Temperature.unit(s.fahrenheit)
@@ -149,7 +156,12 @@ class VentyService : Service() {
                 s.setpointReached -> "Ready at $t°$unit"
                 else -> "Heating to $t°$unit"
             }
-            text = "Battery ${s.battery}%" + if (s.charging) " · charging" else ""
+            text = if (kind.hasBattery) {
+                "Battery ${s.battery}%" + if (s.charging) " · charging" else ""
+            } else {
+                val now = s.currentTenths?.let { "Now ${Temperature.toDisplay(it, s.fahrenheit)}°$unit" } ?: "Connected"
+                now + if (pump) " · pump running" else ""
+            }
         }
         val b = NotificationCompat.Builder(this, CHANNEL_ONGOING)
             .setSmallIcon(R.drawable.ic_notification)
@@ -179,9 +191,10 @@ class VentyService : Service() {
         }
         if (s != null && c is ConnectionState.Connected) {
             b.addAction(0, if (s.heaterMode.isHeating) "Heater off" else "Heat", action(ACTION_TOGGLE, 1))
-            if (s.heaterMode.isHeating) {
+            if (kind.hasBoost && s.heaterMode.isHeating) {
                 b.addAction(0, if (s.heaterMode == HeaterMode.Boost) "Normal" else "Boost", action(ACTION_BOOST, 2))
             }
+            if (kind.hasPump) b.addAction(0, if (pump) "Stop pump" else "Pump", action(ACTION_PUMP, 4))
         }
         b.addAction(0, "Disconnect", action(ACTION_DISCONNECT, 3))
         return b.build()
@@ -207,6 +220,8 @@ class VentyService : Service() {
         getSystemService(NotificationManager::class.java).notify(id, n)
     }
 
+    private data class Snapshot(val status: VentyStatus?, val connection: ConnectionState, val session: SessionKey?, val pump: Boolean)
+
     /** What the ongoing notification needs from the live session. */
     private data class SessionKey(val startMs: Long, val heatPercent: Int?)
 
@@ -228,6 +243,7 @@ class VentyService : Service() {
         private const val ACTION_TOGGLE = "io.github.orth4x0r.venty.TOGGLE"
         private const val ACTION_BOOST = "io.github.orth4x0r.venty.BOOST"
         private const val ACTION_DISCONNECT = "io.github.orth4x0r.venty.DISCONNECT"
+        private const val ACTION_PUMP = "io.github.orth4x0r.venty.PUMP"
 
         fun start(context: Context) {
             runCatching { ContextCompat.startForegroundService(context, Intent(context, VentyService::class.java)) }

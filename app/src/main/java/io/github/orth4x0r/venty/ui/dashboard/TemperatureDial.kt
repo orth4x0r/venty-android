@@ -80,10 +80,10 @@ private class DialGeometry(size: Size) {
     val center = Offset(size.width / 2, size.height / 2)
 }
 
-private fun fraction(tenthsC: Int?): Float {
+private fun fraction(tenthsC: Int?, range: IntRange): Float {
     if (tenthsC == null) return 0f
-    val span = (VentyProtocol.MAX_TARGET - VentyProtocol.MIN_TARGET).toFloat()
-    return ((tenthsC - VentyProtocol.MIN_TARGET) / span).coerceIn(0f, 1f)
+    val span = (range.last - range.first).toFloat()
+    return ((tenthsC - range.first) / span).coerceIn(0f, 1f)
 }
 
 /**
@@ -104,19 +104,22 @@ fun TemperatureDial(
     modifier: Modifier = Modifier,
     /** Called with the temperature under the finger while the ring is dragged, null on release. */
     onDrag: ((Int?) -> Unit)? = null,
+    /** The device's settable range, tenths of °C; the ring spans it. */
+    range: IntRange = VentyProtocol.MIN_TARGET..VentyProtocol.MAX_TARGET,
     content: @Composable () -> Unit,
 ) {
     val drag by rememberUpdatedState(onDrag)
+    val span by rememberUpdatedState(range)
     var dragging by remember { mutableStateOf(false) }
     // The target marker swells under the finger while it's being dragged.
     val markerScale by animateFloatAsState(if (dragging) 1.45f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "marker")
     val current by animateFloatAsState(
-        fraction(currentTenths),
+        fraction(currentTenths, range),
         // A little overshoot makes the arc "ignite" when the heater turns on.
         spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessVeryLow),
         label = "current",
     )
-    val target by animateFloatAsState(fraction(targetTenths), spring(stiffness = Spring.StiffnessMediumLow), label = "target")
+    val target by animateFloatAsState(fraction(targetTenths, range), spring(stiffness = Spring.StiffnessMediumLow), label = "target")
     val color by animateColorAsState(accent, tween(600), label = "accent")
     val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue = 0.10f,
@@ -200,7 +203,7 @@ fun TemperatureDial(
                     if (abs(moved.x * radial.x + moved.y * radial.y) > 0.7f * dist) return@awaitEachGesture
                     ch.consume()
                     dragging = true
-                    last = tenthsAt(ch.position, c, null)
+                    last = tenthsAt(ch.position, c, null, span)
                     drag?.invoke(last)
                     break
                 }
@@ -210,7 +213,7 @@ fun TemperatureDial(
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
                 change.consume()
-                last = tenthsAt(change.position, c, last)
+                last = tenthsAt(change.position, c, last, span)
                 drag?.invoke(last)
             }
             dragging = false
@@ -244,7 +247,7 @@ fun TemperatureDial(
                     )
                     val trackStroke = Stroke(g.stroke, cap = StrokeCap.Round)
                     // Tick marks every 10 °C, worked out once per size.
-                    val ticks = (VentyProtocol.MAX_TARGET - VentyProtocol.MIN_TARGET) / 100
+                    val ticks = (span.last - span.first) / 100
                     val tickPoints = FloatArray((ticks + 1) * 4)
                     for (i in 0..ticks) {
                         val angle = Math.toRadians((START_ANGLE + SWEEP * i / ticks).toDouble())
@@ -468,8 +471,8 @@ private fun View.composeRumble(): Boolean = try {
 }
 
 /** Maps a point on the dial to a target in tenths of °C, clamping the gap at the bottom. */
-private fun tenthsAt(p: Offset, c: Offset, previous: Int?): Int {
-    val mid = (VentyProtocol.MIN_TARGET + VentyProtocol.MAX_TARGET) / 2
+private fun tenthsAt(p: Offset, c: Offset, previous: Int?, range: IntRange): Int {
+    val mid = (range.first + range.last) / 2
     val deg = Math.toDegrees(atan2((p.y - c.y).toDouble(), (p.x - c.x).toDouble())).toFloat()
     val rel = ((deg - START_ANGLE) % 360f + 360f) % 360f
     val f = when {
@@ -480,8 +483,8 @@ private fun tenthsAt(p: Offset, c: Offset, previous: Int?): Int {
         rel > SWEEP + (360f - SWEEP) / 2 -> 0f
         else -> 1f
     }
-    val span = VentyProtocol.MAX_TARGET - VentyProtocol.MIN_TARGET
-    return VentyProtocol.MIN_TARGET + (f * span).roundToInt()
+    val span = range.last - range.first
+    return range.first + (f * span).roundToInt()
 }
 
 @Composable

@@ -191,7 +191,7 @@ private fun EmptyState(modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.height(20.dp))
         Text(
-            "No sessions yet. Heat up your Venty and they'll show up here.",
+            "No sessions yet. Heat up your device and they'll show up here.",
             style = MaterialTheme.typography.bodyLarge,
             color = VentyColors.Muted,
             textAlign = TextAlign.Center,

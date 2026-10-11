@@ -1,4 +1,4 @@
-# Venty BLE protocol
+# Venty and Volcano BLE protocol
 
 How the Storz & Bickel Venty talks over Bluetooth Low Energy, written as a reference for the Android client.
 
@@ -200,10 +200,47 @@ The device has no puff counter, but one can be derived (szv99/storz-bickel-ble, 
 - Treat ~4 consecutive unanswered polls as a disconnect and reconnect with backoff.
 - A foreground service keeps the connection alive when the app is backgrounded (needed for session notifications, e.g. "at temperature").
 
-## 8. Sources
+## 8. Volcano Hybrid
+
+**Not yet tested on a real Volcano.** Facts from firsttris/reactive-volcano-app's Volcano driver and its unit tests (AGPL; facts only, no code borrowed). The Mighty+ has no Bluetooth at all, per Storz & Bickel's own device comparison, so it can't be supported.
+
+Unlike the Venty, every value has its own characteristic. All values are little-endian, temperatures in tenths of °C. No pairing or auth. The device advertises as `S&B VOLCANO…`; the app matches `VOLCANO` in the name or the state service UUID in the advertisement.
+
+| Service | UUID |
+|---|---|
+| State | `10100000-5354-4f52-5a26-4249434b454c` |
+| Control | `10110000-5354-4f52-5a26-4249434b454c` |
+
+Characteristics share the `-5354-4f52-5a26-4249434b454c` suffix:
+
+| Prefix | Service | Value | Notes |
+|---|---|---|---|
+| `10100003` | State | Firmware | ASCII, first 8 chars |
+| `10100004` | State | BLE firmware | ASCII |
+| `10100008` | State | Serial number | ASCII, first 8 chars |
+| `1010000c` | State | Register 1 (activity) | u16, notifies. `0x0020` heater on, `0x0200` auto-shutdown, `0x2000` pump on |
+| `1010000d` | State | Register 2 (display) | u16, notifies. `0x0200` °F, `0x1000` display off while cooling |
+| `1010000e` | State | Register 3 (vibration) | u16, **no notify**. `0x0400` vibration off |
+| `10110001` | Control | Current temperature | u16 tenths, notifies. Junk values above ~300 °C during start-up |
+| `10110003` | Control | Target temperature | reads u16, **write u32** tenths, notifies. 40–230 °C |
+| `10110005` | Control | LED brightness | u16, 0–100 |
+| `1011000c` | Control | Auto-off remaining | u16 seconds, notifies |
+| `1011000d` | Control | Auto-off time | u16 seconds |
+| `1011000f` / `10110010` | Control | Heater on / off | write one `00` byte |
+| `10110013` / `10110014` | Control | Pump on / off | write one `00` byte |
+| `10110015` / `10110016` | Control | Heater hours / minutes | u16, notify |
+
+Register writes are a u32: the low 16 bits pick the bit, and `0x10000` set means "set" (clear otherwise). E.g. °F on is `00 02 01 00`, off is `00 02 00 00`.
+
+There is no "setpoint reached" flag. The app treats the Volcano as ready once the live temperature is within 1 °C of the target, and only drops back to heating 5 °C below it, so the pump's dip doesn't flicker the state.
+
+In the app, `VolcanoLink` accepts the same request packets the controller sends a Venty and turns them into these reads and writes, so the controller, sessions, notification and widget work unchanged. It reports a decoded `VolcanoState` instead of status packets.
+
+## 9. Sources
 
 - Official web app, `https://app.storz-bickel.com/js/qvap.js` and `/js/main.js` (fetched 2026-10-11). Primary source for UUIDs, command bytes, masks and packet layouts.
 - [szv99/storz-bickel-ble](https://github.com/szv99/storz-bickel-ble) (MIT), `protocols/qvap.py`, `puff.py`, `discovery.py`. Matches the official app on every point checked.
 - [lorek123/snb-ble](https://github.com/lorek123/snb-ble) (MIT), `venty.py`, `protocol.py`, `s&b_procol.md`. Useful, but has the service UUID and find-device byte wrong and omits the settings write mask in byte 15.
-- [firsttris/reactive-volcano-app](https://github.com/firsttris/reactive-volcano-app) (AGPL; facts only, no code borrowed). Source of the no-live-temperature, offset range, boost timeout and bootloader-version notes.
+- [firsttris/reactive-volcano-app](https://github.com/firsttris/reactive-volcano-app) (AGPL; facts only, no code borrowed). Source of the no-live-temperature, offset range, boost timeout and bootloader-version notes, and of the whole Volcano Hybrid section.
+- [Storz & Bickel device comparison](https://support.storz-bickel.com/hc/en-us/articles/36311732152977-Device-Comparison): app control is listed for the Volcano Hybrid, Venty, Crafty+ and Veazy only, not the Mighty+.
 - [nicandris/ha-snb](https://github.com/nicandris/ha-snb), Home Assistant integration built on lorek123's library.
