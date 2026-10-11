@@ -349,7 +349,21 @@ class VentyController(context: Context) {
         } else {
             VentyProtocol.setHeaterMode(mode)
         }
-        scope.launch { sendSafely(packet) }
+        scope.launch {
+            sendSafely(packet)
+            if (!leavingBoost) return@launch
+            // On a real Venty, writing mode 1 while boosting was ignored. If the device is still
+            // boosting after a couple of polls, cycle the heater off and straight back on: that
+            // drops the boost, and a second of heater-off doesn't cool it noticeably.
+            delay(1_200)
+            if (deviceStatus?.heaterMode == HeaterMode.Boost || deviceStatus?.heaterMode == HeaterMode.SuperBoost) {
+                Log.i(TAG, "boost ignored mode 1; cycling heater off/on")
+                pendingHeater = mode to SystemClock.elapsedRealtime()
+                sendSafely(VentyProtocol.setHeaterMode(HeaterMode.Off))
+                delay(300)
+                sendSafely(base?.let { VentyProtocol.setHeaterModeAndTarget(HeaterMode.On, it) } ?: VentyProtocol.setHeaterMode(HeaterMode.On))
+            }
+        }
     }
 
     private suspend fun sendSafely(packet: ByteArray) {
