@@ -23,6 +23,10 @@ object VentyProtocol {
     const val MASK_SUPERBOOST = 0x08
     const val MASK_HEATER = 0x20
 
+    /** Boost offsets, °C. Range reported by reactive-volcano-app; unverified here. */
+    const val MIN_OFFSET = 1
+    const val MAX_OFFSET = 99
+
     /** Published Venty range, in tenths of a degree Celsius. The device itself does not clamp. */
     const val MIN_TARGET = 400
     const val MAX_TARGET = 2100
@@ -39,6 +43,16 @@ object VentyProtocol {
     fun setTarget(tenthsC: Int): ByteArray = packet(CMD_STATUS).also {
         it[1] = MASK_TARGET.toByte()
         it.putU16(4, tenthsC.coerceIn(MIN_TARGET, MAX_TARGET))
+    }
+
+    fun setBoostOffset(degreesC: Int): ByteArray = packet(CMD_STATUS).also {
+        it[1] = MASK_BOOST.toByte()
+        it[6] = degreesC.coerceIn(MIN_OFFSET, MAX_OFFSET).toByte()
+    }
+
+    fun setSuperBoostOffset(degreesC: Int): ByteArray = packet(CMD_STATUS).also {
+        it[1] = MASK_SUPERBOOST.toByte()
+        it[7] = degreesC.coerceIn(MIN_OFFSET, MAX_OFFSET).toByte()
     }
 
     fun setHeaterMode(mode: HeaterMode): ByteArray = packet(CMD_STATUS).also {

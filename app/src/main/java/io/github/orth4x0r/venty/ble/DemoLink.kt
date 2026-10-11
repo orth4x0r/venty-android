@@ -79,6 +79,8 @@ class DemoLink : VentyLink {
             state = state.copy(targetTenths = p.u16(4), setpointReached = false)
             autoOffTicks = AUTO_OFF_SECONDS * TICKS_PER_SECOND
         }
+        if (mask and VentyProtocol.MASK_BOOST != 0) state = state.copy(boostOffset = p.u8(6))
+        if (mask and VentyProtocol.MASK_SUPERBOOST != 0) state = state.copy(superBoostOffset = p.u8(7))
         if (mask and VentyProtocol.MASK_HEATER != 0) {
             val mode = HeaterMode.fromCode(p.u8(11))
             state = state.copy(heaterMode = mode, setpointReached = false)

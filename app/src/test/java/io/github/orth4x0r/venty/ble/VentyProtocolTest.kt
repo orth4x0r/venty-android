@@ -36,6 +36,22 @@ class VentyProtocolTest {
     }
 
     @Test
+    fun `boost offsets match the documented packets and clamp`() {
+        // docs/PROTOCOL.md: Set boost offset 15 -> 01 04 00 00 00 00 0F
+        assertArrayEquals(padded(0x01, 0x04, 0, 0, 0, 0, 0x0F), VentyProtocol.setBoostOffset(15))
+        // Set superboost offset 15 -> 01 08 00 00 00 00 00 0F
+        assertArrayEquals(padded(0x01, 0x08, 0, 0, 0, 0, 0, 0x0F), VentyProtocol.setSuperBoostOffset(15))
+        assertEquals(99, VentyProtocol.setBoostOffset(500).u8(6))
+        assertEquals(1, VentyProtocol.setSuperBoostOffset(0).u8(7))
+    }
+
+    @Test
+    fun `boost modes are heater modes 2 and 3`() {
+        assertEquals(2, VentyProtocol.setHeaterMode(HeaterMode.Boost).u8(11))
+        assertEquals(3, VentyProtocol.setHeaterMode(HeaterMode.SuperBoost).u8(11))
+    }
+
+    @Test
     fun `parses a status packet`() {
         val packet = padded(
             0x01, 0x00,

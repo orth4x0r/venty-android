@@ -69,6 +69,8 @@ class VentyController(context: Context) {
     private var sessionJob: Job? = null
     private var scanJob: Job? = null
     private var targetWriteJob: Job? = null
+    private var boostWriteJob: Job? = null
+    private var superBoostWriteJob: Job? = null
     @Volatile private var link: VentyLink? = null
     @Volatile private var lastStatusAt = 0L
     @Volatile private var deviceStatus: VentyStatus? = null
@@ -76,6 +78,8 @@ class VentyController(context: Context) {
     // Optimistic values shown until the device reports them back, or until they expire.
     @Volatile private var pendingTarget: Pair<Int, Long>? = null
     @Volatile private var pendingHeater: Pair<HeaterMode, Long>? = null
+    @Volatile private var pendingBoost: Pair<Int, Long>? = null
+    @Volatile private var pendingSuperBoost: Pair<Int, Long>? = null
 
     val bluetoothEnabled: Boolean get() = adapter?.isEnabled == true
 
@@ -258,8 +262,16 @@ class VentyController(context: Context) {
             else shown = shown.copy(targetTenths = value)
         }
         pendingHeater?.let { (mode, at) ->
-            if (device.heaterMode.isHeating == mode.isHeating || now - at > PENDING_HOLD_MS) pendingHeater = null
+            if (device.heaterMode == mode || now - at > PENDING_HOLD_MS) pendingHeater = null
             else shown = shown.copy(heaterMode = mode)
+        }
+        pendingBoost?.let { (value, at) ->
+            if (device.boostOffset == value || now - at > PENDING_HOLD_MS) pendingBoost = null
+            else shown = shown.copy(boostOffset = value)
+        }
+        pendingSuperBoost?.let { (value, at) ->
+            if (device.superBoostOffset == value || now - at > PENDING_HOLD_MS) pendingSuperBoost = null
+            else shown = shown.copy(superBoostOffset = value)
         }
         _status.value = shown
     }
@@ -279,8 +291,32 @@ class VentyController(context: Context) {
         }
     }
 
-    fun setHeater(on: Boolean) {
-        val mode = if (on) HeaterMode.On else HeaterMode.Off
+    fun setBoostOffset(degreesC: Int) {
+        val value = degreesC.coerceIn(VentyProtocol.MIN_OFFSET, VentyProtocol.MAX_OFFSET)
+        pendingBoost = value to SystemClock.elapsedRealtime()
+        publish()
+        boostWriteJob?.cancel()
+        boostWriteJob = scope.launch {
+            delay(WRITE_DEBOUNCE_MS)
+            pendingBoost = value to SystemClock.elapsedRealtime()
+            sendSafely(VentyProtocol.setBoostOffset(value))
+        }
+    }
+
+    fun setSuperBoostOffset(degreesC: Int) {
+        val value = degreesC.coerceIn(VentyProtocol.MIN_OFFSET, VentyProtocol.MAX_OFFSET)
+        pendingSuperBoost = value to SystemClock.elapsedRealtime()
+        publish()
+        superBoostWriteJob?.cancel()
+        superBoostWriteJob = scope.launch {
+            delay(WRITE_DEBOUNCE_MS)
+            pendingSuperBoost = value to SystemClock.elapsedRealtime()
+            sendSafely(VentyProtocol.setSuperBoostOffset(value))
+        }
+    }
+
+    /** Boost and superboost are written as heater modes 2 and 3; see PROTOCOL.md for how sure we are. */
+    fun setHeaterMode(mode: HeaterMode) {
         pendingHeater = mode to SystemClock.elapsedRealtime()
         publish()
         scope.launch { sendSafely(VentyProtocol.setHeaterMode(mode)) }

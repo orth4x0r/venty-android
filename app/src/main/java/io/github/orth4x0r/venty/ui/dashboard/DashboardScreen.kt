@@ -5,6 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +48,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -117,7 +120,9 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                 s = s,
                 info = info,
                 onTarget = controller::setTarget,
-                onHeater = controller::setHeater,
+                onMode = controller::setHeaterMode,
+                onBoost = controller::setBoostOffset,
+                onSuperBoost = controller::setSuperBoostOffset,
             )
         }
         Spacer(Modifier.height(24.dp))
@@ -129,9 +134,19 @@ private fun Dashboard(
     s: VentyStatus,
     info: DeviceInfo,
     onTarget: (Int) -> Unit,
-    onHeater: (Boolean) -> Unit,
+    onMode: (HeaterMode) -> Unit,
+    onBoost: (Int) -> Unit,
+    onSuperBoost: (Int) -> Unit,
 ) {
     val f = s.fahrenheit
+
+    // Keep the screen on while the heater runs, so the status stays in view.
+    val view = LocalView.current
+    val heaterOn = s.heaterMode.isHeating
+    DisposableEffect(heaterOn) {
+        view.keepScreenOn = heaterOn
+        onDispose { view.keepScreenOn = false }
+    }
     val unit = Temperature.unit(f)
     val phase = HeaterPhase.of(s)
 
@@ -177,8 +192,16 @@ private fun Dashboard(
     Spacer(Modifier.height(4.dp))
     TargetCard(s, onTarget)
     Spacer(Modifier.height(16.dp))
-    HeaterButton(on = s.heaterMode.isHeating, onToggle = { onHeater(!s.heaterMode.isHeating) })
-    Spacer(Modifier.height(20.dp))
+    HeaterButton(on = s.heaterMode.isHeating, onToggle = { onMode(if (s.heaterMode.isHeating) HeaterMode.Off else HeaterMode.On) })
+    AnimatedVisibility(visible = s.heaterMode.isHeating, enter = expandVertically(), exit = shrinkVertically()) {
+        Column {
+            Spacer(Modifier.height(12.dp))
+            BoostSelector(s, onMode)
+        }
+    }
+    Spacer(Modifier.height(16.dp))
+    BoostOffsetsCard(s, onBoost, onSuperBoost)
+    Spacer(Modifier.height(16.dp))
     InfoRow(s, info)
 }
 
@@ -278,14 +301,19 @@ private fun TargetCard(s: VentyStatus, onTarget: (Int) -> Unit) {
 
 /** A round button that fires once on tap and keeps firing while held. */
 @Composable
-private fun RepeatButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onStep: () -> Unit) {
+private fun RepeatButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    size: Int = 52,
+    onStep: () -> Unit,
+) {
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val step by rememberUpdatedState(onStep)
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(52.dp)
+            .size(size.dp)
             .clip(CircleShape)
             .background(VentyColors.SurfaceHigh)
             .pointerInput(Unit) {
@@ -305,6 +333,53 @@ private fun RepeatButton(icon: androidx.compose.ui.graphics.vector.ImageVector, 
             },
     ) {
         Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+/** Normal / Boost / Superboost while the heater is on. Labels show the resulting temperature. */
+@Composable
+private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    val options = listOf(
+        Triple(HeaterMode.On, "Normal", 0),
+        Triple(HeaterMode.Boost, "Boost", s.boostOffset),
+        Triple(HeaterMode.SuperBoost, "Super", s.boostOffset + s.superBoostOffset),
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(VentyColors.Surface)
+            .padding(6.dp),
+    ) {
+        options.forEach { (mode, label, offset) ->
+            val selected = s.heaterMode == mode
+            val accent = HeaterPhase.of(s.copy(heaterMode = mode, setpointReached = false)).let {
+                if (mode == HeaterMode.On) VentyColors.Heat else it.color
+            }
+            val bg by animateColorAsState(if (selected) accent.copy(alpha = 0.18f) else Color.Transparent, label = "segBg")
+            val fg by animateColorAsState(if (selected) accent else VentyColors.Muted, label = "segFg")
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(bg)
+                    .clickable(enabled = !selected) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onMode(mode)
+                    }
+                    .padding(vertical = 10.dp),
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
+                Text(
+                    "${Temperature.toDisplay(s.targetTenths + offset * 10, s.fahrenheit)}°",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = fg.copy(alpha = 0.8f),
+                )
+            }
+        }
     }
 }
 
@@ -329,6 +404,37 @@ private fun HeaterButton(on: Boolean, onToggle: () -> Unit) {
 }
 
 @Composable
+private fun BoostOffsetsCard(s: VentyStatus, onBoost: (Int) -> Unit, onSuperBoost: (Int) -> Unit) {
+    Card {
+        Text("Boost offsets", style = MaterialTheme.typography.labelLarge, color = VentyColors.Muted)
+        Spacer(Modifier.height(8.dp))
+        OffsetRow("Boost", s.boostOffset, VentyColors.Boost, onBoost)
+        Spacer(Modifier.height(10.dp))
+        OffsetRow("Superboost", s.superBoostOffset, VentyColors.SuperBoost, onSuperBoost, hint = "on top of boost")
+    }
+}
+
+@Composable
+private fun OffsetRow(label: String, value: Int, color: Color, onChange: (Int) -> Unit, hint: String? = null) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.titleMedium)
+            if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
+        }
+        RepeatButton(Icons.Rounded.Remove, "Lower $label", size = 40) { onChange(value - 1) }
+        Text(
+            "+$value°",
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(56.dp),
+        )
+        RepeatButton(Icons.Rounded.Add, "Raise $label", size = 40) { onChange(value + 1) }
+    }
+}
+
+@Composable
 private fun InfoRow(s: VentyStatus, info: DeviceInfo) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
         InfoTile("Battery", "${s.battery}%" + if (s.charging) " · charging" else "", Modifier.weight(1f))
@@ -340,8 +446,8 @@ private fun InfoRow(s: VentyStatus, info: DeviceInfo) {
     }
     Spacer(Modifier.height(12.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        InfoTile("Boost", "+${s.boostOffset}° / +${s.superBoostOffset}°", Modifier.weight(1f))
         InfoTile("Firmware", info.firmware ?: "–", Modifier.weight(1f))
+        InfoTile("Unit", "°" + Temperature.unit(s.fahrenheit), Modifier.weight(1f))
     }
 }
 
