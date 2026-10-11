@@ -217,7 +217,7 @@ private fun Dashboard(
             color = VentyColors.Muted,
         )
         BigTemperature(
-            value = Temperature.toDisplay(current ?: s.effectiveTargetTenths, f).toString(),
+            value = Temperature.toDisplay(current ?: s.effectiveTargetTenths, f),
             unit = unit,
             color = if (current == null && !heating) VentyColors.Muted else MaterialTheme.colorScheme.onBackground,
         )
