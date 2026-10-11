@@ -141,12 +141,22 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
         else -> "Venty"
     }
 
+    // Keep the screen on while the heater runs, on every page, so the status stays in view.
+    val view = LocalView.current
+    val heaterOn = status?.heaterMode?.isHeating == true
+    DisposableEffect(heaterOn, prefs.keepScreenOn) {
+        view.keepScreenOn = heaterOn && prefs.keepScreenOn
+        onDispose { view.keepScreenOn = false }
+    }
+
     var page by rememberSaveable { mutableStateOf(Page.Main) }
     BackHandler(enabled = page != Page.Main) { page = Page.Main }
 
     val scope = rememberCoroutineScope()
     var notice by remember { mutableStateOf<String?>(null) }
+    var undo by remember { mutableStateOf<(() -> Unit)?>(null) }
     fun showNotice(msg: String, forMs: Long = 3500) {
+        if (undo != null && !msg.startsWith("Removed preset")) undo = null
         notice = msg
         scope.launch {
             delay(forMs)
@@ -223,6 +233,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                 Page.History -> HistoryScreen(
                     history = history,
                     lifetimePuffs = lifetimePuffs,
+                    fahrenheit = status?.fahrenheit == true,
                     onClear = app.sessions::clearHistory,
                     onBack = { page = Page.Main },
                 )
@@ -243,7 +254,13 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                         onForget = controller::forgetDevice,
                     )
                     AnimatedVisibility(visible = notice != null, enter = expandVertically(), exit = shrinkVertically()) {
-                        Banner(notice ?: "", icon = Icons.Rounded.Info)
+                        Banner(notice ?: "", icon = Icons.Rounded.Info, action = undo?.let { u ->
+                            "Undo" to {
+                                u()
+                                undo = null
+                                notice = null
+                            }
+                        })
                     }
                     AnimatedVisibility(
                         visible = connection is ConnectionState.Reconnecting,
@@ -265,7 +282,6 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             presets = presets,
                             batterySamples = batterySamples,
                             lifetimePuffs = lifetimePuffs,
-                            keepScreenOn = prefs.keepScreenOn,
                             onTarget = controller::setTarget,
                             onMode = controller::setHeaterMode,
                             onBoost = controller::setBoostOffset,
@@ -273,7 +289,8 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             onAddPreset = app.prefs::addPreset,
                             onRemovePreset = { p ->
                                 app.prefs.removePreset(p)
-                                showNotice("Removed preset ${p.name}")
+                                undo = { app.prefs.addPreset(p) }
+                                showNotice("Removed preset ${p.name}", forMs = 5000)
                             },
                         )
                     }
@@ -297,7 +314,6 @@ private fun Dashboard(
     presets: List<Preset>,
     batterySamples: List<BatterySample>,
     lifetimePuffs: Int,
-    keepScreenOn: Boolean,
     onTarget: (Int) -> Unit,
     onMode: (HeaterMode) -> Unit,
     onBoost: (Int) -> Unit,
@@ -307,13 +323,7 @@ private fun Dashboard(
 ) {
     val f = s.fahrenheit
 
-    // Keep the screen on while the heater runs, so the status stays in view.
     val view = LocalView.current
-    val heaterOn = s.heaterMode.isHeating
-    DisposableEffect(heaterOn, keepScreenOn) {
-        view.keepScreenOn = heaterOn && keepScreenOn
-        onDispose { view.keepScreenOn = false }
-    }
     val unit = Temperature.unit(f)
     val phase = HeaterPhase.of(s)
 
@@ -330,12 +340,14 @@ private fun Dashboard(
     var dragTenths by remember { mutableStateOf<Int?>(null) }
     val dragDisplay = dragTenths?.let { Temperature.toDisplay(it, f) }
     val onDialDrag: (Int?) -> Unit = { t ->
+        // Read the state itself, not the composed value, which can be a frame behind the finger.
+        val prev = dragTenths?.let { Temperature.toDisplay(it, f) }
         if (t == null) {
-            dragDisplay?.let { onTarget(Temperature.fromDisplay(it, f)) }
+            prev?.let { onTarget(Temperature.fromDisplay(it, f)) }
             dragTenths = null
         } else {
             val d = Temperature.toDisplay(t, f)
-            if (d != dragDisplay) view.detent(heavy = d % 10 == 0)
+            if (d != prev) view.detent(heavy = d % 10 == 0)
             dragTenths = t
         }
     }
@@ -929,7 +941,11 @@ private fun BatteryBadge(percent: Int, charging: Boolean) {
 }
 
 @Composable
-private fun Banner(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Rounded.Sync) {
+private fun Banner(
+    text: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Rounded.Sync,
+    action: Pair<String, () -> Unit>? = null,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -941,7 +957,10 @@ private fun Banner(text: String, icon: androidx.compose.ui.graphics.vector.Image
     ) {
         Icon(icon, null, tint = VentyColors.Warning)
         Spacer(Modifier.width(12.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = VentyColors.Warning)
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = VentyColors.Warning, modifier = Modifier.weight(1f))
+        if (action != null) {
+            TextButton(onClick = action.second) { Text(action.first, color = VentyColors.Warning) }
+        }
     }
 }
 

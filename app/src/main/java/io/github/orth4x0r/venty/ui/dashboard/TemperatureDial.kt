@@ -36,6 +36,8 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 import kotlin.math.cos
@@ -110,8 +112,22 @@ fun TemperatureDial(
             // Only the ring is grabbable, so the middle of the dial still scrolls the page.
             val d = (down.position - c).getDistance()
             if (d < r * 0.55f || d > r * 1.05f) return@awaitEachGesture
-            down.consume()
-            drag?.invoke(tenthsAt(down.position, c))
+            // Wait for real movement along the ring before taking over, so taps and vertical
+            // swipes that start on the dial scroll the page instead of changing the target.
+            var moved = Offset.Zero
+            while (true) {
+                val ch = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+                if (!ch.pressed || ch.isConsumed) return@awaitEachGesture
+                moved += ch.positionChange()
+                val dist = moved.getDistance()
+                if (dist > viewConfiguration.touchSlop) {
+                    val radial = (ch.position - c) / (ch.position - c).getDistance()
+                    if (abs(moved.x * radial.x + moved.y * radial.y) > 0.7f * dist) return@awaitEachGesture
+                    ch.consume()
+                    drag?.invoke(tenthsAt(ch.position, c))
+                    break
+                }
+            }
             while (true) {
                 val event = awaitPointerEvent()
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break

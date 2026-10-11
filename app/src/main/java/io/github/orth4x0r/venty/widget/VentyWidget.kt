@@ -45,8 +45,6 @@ class VentyWidgetProvider : AppWidgetProvider() {
             // Anything that is heating (On, Boost, SuperBoost) turns off; otherwise turn on.
             val heating = controller.status.value?.heaterMode?.isHeating == true
             controller.setHeaterMode(if (heating) HeaterMode.Off else HeaterMode.On)
-        } else {
-            context.startActivity(openAppIntent(context))
         }
     }
 }
@@ -109,7 +107,12 @@ object VentyWidget {
         )
 
         views.setOnClickPendingIntent(R.id.widget_root, openAppPendingIntent(context))
-        views.setOnClickPendingIntent(R.id.widget_power, togglePendingIntent(context))
+        // Starting an activity from a receiver is blocked in the background, so when there's no
+        // connection the button opens the app directly.
+        views.setOnClickPendingIntent(
+            R.id.widget_power,
+            if (live != null) togglePendingIntent(context) else openAppPendingIntent(context),
+        )
         return views
     }
 }

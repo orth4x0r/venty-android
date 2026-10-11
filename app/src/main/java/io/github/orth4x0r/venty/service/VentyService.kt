@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /**
@@ -38,7 +39,8 @@ class VentyService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val app get() = application as VentyApp
 
-    private var wasReady = false
+    // Null until the first status, so connecting to an already-hot Venty doesn't fire the alert.
+    private var wasReady: Boolean? = null
     private var lowBatteryAlerted = false
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -46,9 +48,18 @@ class VentyService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannels(this)
-        startInForeground(buildOngoing(null, app.controller.connection.value))
+        try {
+            startInForeground(buildOngoing(null, app.controller.connection.value))
+        } catch (e: Exception) {
+            // Not allowed to run in the foreground right now (missing permission or background start).
+            stopSelf()
+            return
+        }
         scope.launch {
-            combine(app.controller.status, app.controller.connection) { s, c -> s to c }.collect { (s, c) ->
+            // Ignore the auto-off countdown so the notification isn't rebuilt every second.
+            combine(app.controller.status, app.controller.connection) { s, c -> s?.copy(autoOffSeconds = 0) to c }
+                .distinctUntilChanged()
+                .collect { (s, c) ->
                 if (c is ConnectionState.Idle || c is ConnectionState.Failed || c is ConnectionState.Scanning) {
                     stopSelf()
                     return@collect
@@ -84,7 +95,7 @@ class VentyService : Service() {
         if (s == null) return
         val prefs = app.prefs.app.value
         val ready = s.heaterMode.isHeating && s.setpointReached
-        if (ready && !wasReady && prefs.readyNotification) {
+        if (ready && wasReady == false && prefs.readyNotification && !appInForeground()) {
             val t = Temperature.toDisplay(s.effectiveTargetTenths, s.fahrenheit)
             notify(
                 ALERT_ID,
@@ -100,6 +111,9 @@ class VentyService : Service() {
         }
         if (s.charging || s.battery > threshold + 5) lowBatteryAlerted = false
     }
+
+    private fun appInForeground() =
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
 
     private fun alert(title: String, text: String) = NotificationCompat.Builder(this, CHANNEL_ALERTS)
         .setSmallIcon(R.drawable.ic_notification)

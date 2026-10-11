@@ -72,6 +72,7 @@ private fun dayOf(ms: Long, zone: ZoneId): LocalDate = Instant.ofEpochMilli(ms).
 fun HistoryScreen(
     history: List<SessionRecord>,
     lifetimePuffs: Int,
+    fahrenheit: Boolean,
     onClear: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -139,7 +140,7 @@ fun HistoryScreen(
                             modifier = Modifier.padding(top = 8.dp, start = 4.dp),
                         )
                     }
-                    items(history, key = { it.startMs }) { SessionRow(it, zone) }
+                    items(history, key = { it.startMs }) { SessionRow(it, zone, fahrenheit) }
                     item(key = "end") { Spacer(Modifier.height(16.dp)) }
                 }
             }
@@ -301,7 +302,7 @@ private fun ChartCard(perDay: List<Int>, today: LocalDate, modifier: Modifier = 
 }
 
 @Composable
-private fun SessionRow(r: SessionRecord, zone: ZoneId) {
+private fun SessionRow(r: SessionRecord, zone: ZoneId, fahrenheit: Boolean) {
     val shape = RoundedCornerShape(16.dp)
     val start = Instant.ofEpochMilli(r.startMs).atZone(zone)
     val totalSec = ((r.endMs - r.startMs) / 1000L).coerceAtLeast(0L)
@@ -326,7 +327,7 @@ private fun SessionRow(r: SessionRecord, zone: ZoneId) {
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                "$duration · max ${r.maxTargetTenths / 10} °C",
+                "$duration · max ${io.github.orth4x0r.venty.ui.Temperature.toDisplay(r.maxTargetTenths, fahrenheit)}°${io.github.orth4x0r.venty.ui.Temperature.unit(fahrenheit)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = VentyColors.Muted,
             )

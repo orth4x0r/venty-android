@@ -17,21 +17,26 @@ data class BatterySample(val atMs: Long, val percent: Int, val charging: Boolean
 /** Battery level over the last week, sampled at most once a minute while connected. */
 class BatteryLog(context: Context) {
     private val file = File(context.applicationContext.filesDir, "battery.json")
-    private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // One thread, so the initial load runs before any save and saves land in order.
+    private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     private val lock = Any()
 
     private val _samples = MutableStateFlow<List<BatterySample>>(emptyList())
     val samples: StateFlow<List<BatterySample>> = _samples.asStateFlow()
 
     init {
-        io.launch { _samples.value = load() }
+        io.launch {
+            val loaded = load()
+            // Keep anything recorded while the file was still loading.
+            synchronized(lock) { _samples.value = (loaded + _samples.value).sortedBy { it.atMs } }
+        }
     }
 
     fun onStatus(s: VentyStatus, nowMs: Long = System.currentTimeMillis()) {
         synchronized(lock) {
             val last = _samples.value.lastOrNull()
             val changed = last == null || last.percent != s.battery || last.charging != s.charging
-            if (!changed && nowMs - last!!.atMs < 10 * MINUTE) return
+            if (!changed && nowMs - last.atMs < 10 * MINUTE) return
             if (last != null && nowMs - last.atMs < MINUTE && last.charging == s.charging) return
             val cutoff = nowMs - 7 * DAY
             _samples.value = (_samples.value + BatterySample(nowMs, s.battery, s.charging)).filter { it.atMs >= cutoff }
