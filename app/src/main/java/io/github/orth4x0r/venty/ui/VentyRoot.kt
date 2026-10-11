@@ -79,7 +79,14 @@ fun VentyRoot(controller: VentyController) {
         }
     }
 
-    var splash by rememberSaveable { mutableStateOf(true) }
+    // Skipped when the phone has animations turned off.
+    var splash by rememberSaveable {
+        mutableStateOf(
+            android.provider.Settings.Global.getFloat(
+                context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
+            ) > 0f,
+        )
+    }
 
     LaunchedEffect(granted, bluetoothOn) {
         if (granted && bluetoothOn && !triedAutoConnect && connection == ConnectionState.Idle) {

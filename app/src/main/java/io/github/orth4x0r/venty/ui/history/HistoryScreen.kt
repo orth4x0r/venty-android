@@ -96,7 +96,8 @@ fun HistoryScreen(
     }
     val avgPuffs = if (history.isEmpty()) 0.0 else history.sumOf { it.puffs }.toDouble() / history.size
 
-    Box(Modifier.fillMaxSize().background(VentyColors.Background)) {
+    // Transparent, so the dashboard's ambient glow carries through.
+    Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),

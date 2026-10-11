@@ -35,6 +35,9 @@ import io.github.orth4x0r.venty.ble.VentyProtocol
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import kotlin.math.abs
@@ -73,6 +76,9 @@ fun TemperatureDial(
     content: @Composable () -> Unit,
 ) {
     val drag by rememberUpdatedState(onDrag)
+    var dragging by remember { mutableStateOf(false) }
+    // The target marker swells under the finger while it's being dragged.
+    val markerScale by animateFloatAsState(if (dragging) 1.45f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "marker")
     val current by animateFloatAsState(
         fraction(currentTenths),
         // A little overshoot makes the arc "ignite" when the heater turns on.
@@ -94,12 +100,11 @@ fun TemperatureDial(
         label = "shimmerPos",
     )
     val shimmerAlpha by animateFloatAsState(if (pulsing) 1f else 0f, tween(500), label = "shimmerAlpha")
-    val glowAlpha = if (pulsing) pulse else if (ready) 0.2f else 0.12f
     val coronaLevel by animateFloatAsState((energy.coerceIn(0, 3) / 3f), tween(800), label = "corona")
     val corona by rememberInfiniteTransition(label = "coronaSpin").animateFloat(
         initialValue = 0f,
         targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(if (energy >= 2) 2400 else 5200, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
+        animationSpec = infiniteRepeatable(tween(3600, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
         label = "coronaAngle",
     )
     val arcAlpha by animateFloatAsState(if (dimArc) 0.45f else 1f, tween(600), label = "arcAlpha")
@@ -115,6 +120,7 @@ fun TemperatureDial(
             // Wait for real movement along the ring before taking over, so taps and vertical
             // swipes that start on the dial scroll the page instead of changing the target.
             var moved = Offset.Zero
+            var last: Int? = null
             while (true) {
                 val ch = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
                 if (!ch.pressed || ch.isConsumed) return@awaitEachGesture
@@ -124,7 +130,9 @@ fun TemperatureDial(
                     val radial = (ch.position - c) / (ch.position - c).getDistance()
                     if (abs(moved.x * radial.x + moved.y * radial.y) > 0.7f * dist) return@awaitEachGesture
                     ch.consume()
-                    drag?.invoke(tenthsAt(ch.position, c))
+                    dragging = true
+                    last = tenthsAt(ch.position, c, null)
+                    drag?.invoke(last)
                     break
                 }
             }
@@ -133,14 +141,18 @@ fun TemperatureDial(
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
                 change.consume()
-                drag?.invoke(tenthsAt(change.position, c))
+                last = tenthsAt(change.position, c, last)
+                drag?.invoke(last)
             }
+            dragging = false
             drag?.invoke(null)
         }
     }
 
     Box(modifier.fillMaxWidth().aspectRatio(1f).then(dragModifier), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
+            // Read the pulse here, in drawing, so it redraws the canvas without recomposing.
+            val glowAlpha = if (pulsing) pulse else if (ready) 0.2f else 0.12f
             val stroke = size.minDimension * 0.06f
             val inset = stroke / 2 + size.minDimension * 0.06f
             val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
@@ -243,8 +255,16 @@ fun TemperatureDial(
             // Target marker: a ring sitting on the track.
             val tAngle = Math.toRadians((START_ANGLE + SWEEP * target).toDouble())
             val marker = Offset(this.center.x + (cos(tAngle) * radius).toFloat(), this.center.y + (sin(tAngle) * radius).toFloat())
-            drawCircle(Color(0xFF0F0D0C), radius = stroke * 0.85f, center = marker)
-            drawCircle(Color.White, radius = stroke * 0.85f, center = marker, style = Stroke(stroke * 0.28f))
+            val mr = stroke * 0.85f * markerScale
+            if (markerScale > 1.01f) {
+                drawCircle(
+                    Brush.radialGradient(listOf(color.copy(alpha = 0.6f), Color.Transparent), center = marker, radius = mr * 2.6f),
+                    radius = mr * 2.6f,
+                    center = marker,
+                )
+            }
+            drawCircle(Color(0xFF0F0D0C), radius = mr, center = marker)
+            drawCircle(Color.White, radius = mr, center = marker, style = Stroke(stroke * 0.28f))
         }
         io.github.orth4x0r.venty.ui.Embers(
             active = pulsing || energy >= 2,
@@ -260,11 +280,15 @@ fun TemperatureDial(
 }
 
 /** Maps a point on the dial to a target in tenths of °C, clamping the gap at the bottom. */
-private fun tenthsAt(p: Offset, c: Offset): Int {
+private fun tenthsAt(p: Offset, c: Offset, previous: Int?): Int {
+    val mid = (VentyProtocol.MIN_TARGET + VentyProtocol.MAX_TARGET) / 2
     val deg = Math.toDegrees(atan2((p.y - c.y).toDouble(), (p.x - c.x).toDouble())).toFloat()
     val rel = ((deg - START_ANGLE) % 360f + 360f) % 360f
     val f = when {
         rel <= SWEEP -> rel / SWEEP
+        // In the gap at the bottom, stay pinned to the end the finger came from rather than
+        // jumping across to the other one.
+        previous != null -> if (previous > mid) 1f else 0f
         rel > SWEEP + (360f - SWEEP) / 2 -> 0f
         else -> 1f
     }

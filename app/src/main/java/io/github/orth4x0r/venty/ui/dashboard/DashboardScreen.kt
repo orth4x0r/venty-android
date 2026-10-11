@@ -86,6 +86,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -343,11 +346,14 @@ private fun Dashboard(
         // Read the state itself, not the composed value, which can be a frame behind the finger.
         val prev = dragTenths?.let { Temperature.toDisplay(it, f) }
         if (t == null) {
-            prev?.let { onTarget(Temperature.fromDisplay(it, f)) }
+            // The dial shows the boosted temperature; the device stores the base under it.
+            val boostDelta = s.effectiveTargetTenths - s.targetTenths
+            prev?.let { onTarget(Temperature.fromDisplay(it, f) - boostDelta) }
             dragTenths = null
         } else {
             val d = Temperature.toDisplay(t, f)
-            if (d != prev) view.detent(heavy = d % 10 == 0)
+            val atEnd = t <= VentyProtocol.MIN_TARGET || t >= VentyProtocol.MAX_TARGET
+            if (d != prev) view.detent(heavy = d % 10 == 0 || atEnd)
             dragTenths = t
         }
     }
@@ -681,6 +687,7 @@ private fun RepeatButton(
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
+            .minimumInteractiveComponentSize()
             .size(size.dp)
             .clip(CircleShape)
             .background(VentyColors.SurfaceHigh)
@@ -931,6 +938,7 @@ private fun BatteryBadge(percent: Int, charging: Boolean) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
+            .clearAndSetSemantics { contentDescription = "Battery $percent%" + if (charging) ", charging" else "" }
             .clip(RoundedCornerShape(50))
             .background(VentyColors.Surface)
             .padding(horizontal = 10.dp, vertical = 6.dp),

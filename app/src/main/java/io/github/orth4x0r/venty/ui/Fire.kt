@@ -30,6 +30,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +61,7 @@ fun LavaLayer(level: Float, color: Color, modifier: Modifier = Modifier) {
         List(9) { Triple(r.nextFloat(), 0.6f + r.nextFloat() * 0.8f, r.nextFloat()) }
     }
     val hot = androidx.compose.ui.graphics.lerp(color, Color(0xFFFFD27A), 0.35f)
+    val hazePath = remember { Path() }
     Canvas(modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
@@ -87,18 +90,18 @@ fun LavaLayer(level: Float, color: Color, modifier: Modifier = Modifier) {
                 center = Offset(cx, cy),
             )
         }
-        heatHaze(t, color, strength)
+        heatHaze(hazePath, t, color, strength)
     }
 }
 
 /** Thin wavy bands of light that wobble like air over a hot road. */
-private fun DrawScope.heatHaze(t: Float, color: Color, strength: Float) {
+private fun DrawScope.heatHaze(path: Path, t: Float, color: Color, strength: Float) {
     val w = size.width
     val h = size.height
     val bands = 7
     for (i in 0 until bands) {
         val baseY = h * (0.42f + 0.07f * i)
-        val path = Path()
+        path.rewind()
         val steps = 24
         for (s in 0..steps) {
             val x = w * s / steps
@@ -144,6 +147,11 @@ fun IgnitionSplash(onDone: () -> Unit) {
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .fillMaxSize()
+            // Swallow touches so nothing underneath can be tapped while the splash plays.
+            .pointerInput(Unit) {
+                awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
+            }
+            .clearAndSetSemantics { }
             .graphicsLayer {
                 alpha = exit.value
                 val s = 1f + (1f - exit.value) * 0.15f

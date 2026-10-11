@@ -148,6 +148,8 @@ class SessionTracker(context: Context) {
                 is PuffEvent.Ended -> puffing = false
                 null -> {}
             }
+            // A resumed puff is merged without an event, so ask the detector directly.
+            puffing = detector.puffing
             val elapsed = ((nowMs - startMs) / 1000L).toInt()
             val eta = if (reached) null else estimateEta(s.effectiveTargetTenths, elapsed, rates)
             _live.value = LiveSession(startMs, puffs, heatUpSeconds, eta, puffing, lastPuffMs)

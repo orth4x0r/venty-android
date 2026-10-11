@@ -94,6 +94,8 @@ class VentyController(context: Context) {
     @Volatile private var pendingHeater: Pair<HeaterMode, Long>? = null
     @Volatile private var pendingBoost: Pair<Int, Long>? = null
     @Volatile private var pendingSuperBoost: Pair<Int, Long>? = null
+    /** Device flag bit -> (value, time written), held until the device reports it. */
+    private val pendingFlags = java.util.concurrent.ConcurrentHashMap<Int, Pair<Boolean, Long>>()
 
     val bluetoothEnabled: Boolean get() = adapter?.isEnabled == true
 
@@ -230,6 +232,8 @@ class VentyController(context: Context) {
         demo: Boolean,
         onUp: () -> Unit,
     ) = coroutineScope {
+        // Forget the previous link's status so "Connected" waits for this link to answer.
+        deviceStatus = null
         launch { l.incoming.collect(::onPacket) }
 
         lastStatusAt = SystemClock.elapsedRealtime()
@@ -300,7 +304,35 @@ class VentyController(context: Context) {
             if (device.superBoostOffset == value || now - at > PENDING_HOLD_MS) pendingSuperBoost = null
             else shown = shown.copy(superBoostOffset = value)
         }
+        for ((bit, pending) in pendingFlags) {
+            val (value, at) = pending
+            if (device.flag(bit) == value || now - at > PENDING_HOLD_MS) pendingFlags.remove(bit)
+            else shown = shown.withFlag(bit, value)
+        }
         _status.value = shown
+    }
+
+    private fun VentyStatus.flag(bit: Int) = when (bit) {
+        VentyProtocol.SETTING_FAHRENHEIT -> fahrenheit
+        VentyProtocol.SETTING_ECO_CHARGE -> ecoChargeOptimization
+        VentyProtocol.SETTING_ECO_VOLTAGE -> ecoVoltageLimit
+        VentyProtocol.SETTING_BOOST_VISUALIZATION -> boostVisualization
+        else -> false
+    }
+
+    private fun VentyStatus.withFlag(bit: Int, on: Boolean) = when (bit) {
+        VentyProtocol.SETTING_FAHRENHEIT -> copy(fahrenheit = on)
+        VentyProtocol.SETTING_ECO_CHARGE -> copy(ecoChargeOptimization = on)
+        VentyProtocol.SETTING_ECO_VOLTAGE -> copy(ecoVoltageLimit = on)
+        VentyProtocol.SETTING_BOOST_VISUALIZATION -> copy(boostVisualization = on)
+        else -> this
+    }
+
+    /** Writes a device flag and shows it straight away, so switches don't bounce back. */
+    private fun setFlag(bit: Int, on: Boolean) {
+        pendingFlags[bit] = on to SystemClock.elapsedRealtime()
+        publish()
+        send(VentyProtocol.setSetting(bit, on))
     }
 
     // ---- Commands -------------------------------------------------------------------------
@@ -374,11 +406,10 @@ class VentyController(context: Context) {
 
     // ---- Settings -------------------------------------------------------------------------
 
-    fun setFahrenheit(on: Boolean) = send(VentyProtocol.setSetting(VentyProtocol.SETTING_FAHRENHEIT, on))
-    fun setEcoCharge(on: Boolean) = send(VentyProtocol.setSetting(VentyProtocol.SETTING_ECO_CHARGE, on))
-    fun setEcoVoltage(on: Boolean) = send(VentyProtocol.setSetting(VentyProtocol.SETTING_ECO_VOLTAGE, on))
-    fun setBoostVisualization(on: Boolean) =
-        send(VentyProtocol.setSetting(VentyProtocol.SETTING_BOOST_VISUALIZATION, on))
+    fun setFahrenheit(on: Boolean) = setFlag(VentyProtocol.SETTING_FAHRENHEIT, on)
+    fun setEcoCharge(on: Boolean) = setFlag(VentyProtocol.SETTING_ECO_CHARGE, on)
+    fun setEcoVoltage(on: Boolean) = setFlag(VentyProtocol.SETTING_ECO_VOLTAGE, on)
+    fun setBoostVisualization(on: Boolean) = setFlag(VentyProtocol.SETTING_BOOST_VISUALIZATION, on)
 
     fun setBrightness(level: Int) {
         _deviceSettings.update { it?.copy(brightness = level.coerceIn(1, 9)) }

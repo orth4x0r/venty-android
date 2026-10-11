@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "GattLink"
 private const val CONNECT_TIMEOUT_MS = 12_000L
@@ -101,7 +101,9 @@ class GattLink private constructor() : VentyLink {
     private suspend fun open(context: Context, device: BluetoothDevice) {
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
             ?: throw LinkLostException("connectGatt returned null")
-        withTimeout(CONNECT_TIMEOUT_MS) { connected.await() }
+        // withTimeoutOrNull, not withTimeout: its exception is a CancellationException, which would
+        // end the reconnect loop instead of triggering a retry.
+        withTimeoutOrNull(CONNECT_TIMEOUT_MS) { connected.await() } ?: throw LinkLostException("Connection timed out")
 
         gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
         runOp("discover services") { gatt.discoverServices() }
@@ -127,7 +129,7 @@ class GattLink private constructor() : VentyLink {
         pendingOp = op
         try {
             if (!start()) throw LinkLostException("Could not start $name")
-            val status = withTimeout(OP_TIMEOUT_MS) { op.await() }
+            val status = withTimeoutOrNull(OP_TIMEOUT_MS) { op.await() } ?: throw LinkLostException("$name timed out")
             if (status != BluetoothGatt.GATT_SUCCESS) throw LinkLostException("$name failed (status $status)")
         } finally {
             pendingOp = null

@@ -67,6 +67,9 @@ class PuffDetector {
         return null
     }
 
+    /** True while a puff is in progress, including one resumed and merged into the last. */
+    val puffing: Boolean get() = inPuff
+
     fun reset() {
         prevAuto = null
         prevTarget = null

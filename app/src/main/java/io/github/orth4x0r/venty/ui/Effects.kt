@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
@@ -142,7 +143,7 @@ fun RollingNumber(value: Int, style: TextStyle, color: Color, modifier: Modifier
                     label = "digit",
                 ) { c ->
                     // A brush in the style (gradient text) only shows if no plain colour overrides it.
-                    Text(c.toString(), style = style, color = if (style.brush != null) Color.Unspecified else color)
+                    Text(c.toString(), style = style.copy(fontFeatureSettings = "tnum"), color = if (style.brush != null) Color.Unspecified else color)
                 }
             }
         }
@@ -158,18 +159,22 @@ private class Ember(var x: Float, var y: Float, var vy: Float, var life: Float, 
 @Composable
 fun Embers(active: Boolean, color: Color, modifier: Modifier = Modifier, rate: Float = 1f) {
     val embers = remember { ArrayList<Ember>() }
-    val frame = remember { Animatable(0f) }
+    var frameNanos by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    val lastNanos = remember { longArrayOf(0L) }
     val level by animateFloatAsState(if (active) 1f else 0f, tween(900), label = "emberLevel")
-    LaunchedEffect(Unit) {
-        while (true) {
-            frame.snapTo(frame.value + 1f)
-            delay(16)
-        }
+    // Tied to the display's frame clock, and stops once the heater is off and the last ember
+    // has burned out, so it costs nothing while idle.
+    LaunchedEffect(active) {
+        while (active || embers.isNotEmpty()) androidx.compose.runtime.withFrameNanos { frameNanos = it }
+        lastNanos[0] = 0L
     }
     Canvas(modifier) {
-        frame.value // read to redraw every frame
+        val now = frameNanos
+        // Movement scales with real elapsed time, so high-refresh screens don't double the speed.
+        val dt = if (lastNanos[0] == 0L) 1f else ((now - lastNanos[0]) / 16_666_667f).coerceIn(0f, 3f)
+        lastNanos[0] = now
         val rnd = Random
-        if (level > 0.05f && embers.size < (28 * rate).toInt() && rnd.nextFloat() < 0.35f * level * rate) {
+        if (level > 0.05f && embers.size < (28 * rate).toInt() && rnd.nextFloat() < 0.35f * level * rate * dt) {
             embers += Ember(
                 x = size.width * (0.3f + rnd.nextFloat() * 0.4f),
                 y = size.height * 0.9f,
@@ -182,8 +187,8 @@ fun Embers(active: Boolean, color: Color, modifier: Modifier = Modifier, rate: F
         val it = embers.iterator()
         while (it.hasNext()) {
             val e = it.next()
-            e.y -= e.vy
-            e.life -= 0.008f
+            e.y -= e.vy * dt
+            e.life -= 0.008f * dt
             if (e.life <= 0f) { it.remove(); continue }
             val x = e.x + sin((e.life * 10f) + e.wobble) * 6f
             drawCircle(color.copy(alpha = 0.35f * e.life * level), radius = e.size * 2.6f, center = Offset(x, e.y))
