@@ -96,6 +96,8 @@ class VentyProtocolTest {
         assertEquals(1850, base.copy(heaterMode = HeaterMode.On).effectiveTargetTenths)
         assertEquals(2000, base.copy(heaterMode = HeaterMode.Boost).effectiveTargetTenths)
         assertEquals(2100, base.copy(heaterMode = HeaterMode.SuperBoost).effectiveTargetTenths)
+        // Capped at the Venty's 210 °C maximum.
+        assertEquals(2100, base.copy(targetTenths = 2000, heaterMode = HeaterMode.Boost).effectiveTargetTenths)
     }
 
     @Test

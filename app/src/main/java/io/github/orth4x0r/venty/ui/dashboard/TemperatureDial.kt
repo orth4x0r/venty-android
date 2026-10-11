@@ -56,6 +56,7 @@ fun TemperatureDial(
     accent: Color,
     pulsing: Boolean,
     dimArc: Boolean = false,
+    ready: Boolean = false,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -72,7 +73,14 @@ fun TemperatureDial(
         animationSpec = infiniteRepeatable(tween(1300), RepeatMode.Reverse),
         label = "pulse",
     )
-    val glowAlpha = if (pulsing) pulse else 0.12f
+    val shimmer by rememberInfiniteTransition(label = "shimmer").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
+        label = "shimmerPos",
+    )
+    val shimmerAlpha by animateFloatAsState(if (pulsing) 1f else 0f, tween(500), label = "shimmerAlpha")
+    val glowAlpha = if (pulsing) pulse else if (ready) 0.2f else 0.12f
     val arcAlpha by animateFloatAsState(if (dimArc) 0.45f else 1f, tween(600), label = "arcAlpha")
 
     Box(modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
@@ -126,12 +134,44 @@ fun TemperatureDial(
                 }
             }
 
+            // A bright spark that runs along the arc while heating.
+            if (shimmerAlpha > 0.01f && current > 0.02f) {
+                val len = 0.12f
+                val head = shimmer * (1f + len)
+                val from = (head - len).coerceIn(0f, 1f) * current
+                val to = head.coerceIn(0f, 1f) * current
+                if (to > from) {
+                    drawArc(
+                        Color.White.copy(alpha = 0.55f * shimmerAlpha * arcAlpha),
+                        START_ANGLE + SWEEP * from,
+                        SWEEP * (to - from),
+                        false,
+                        topLeft,
+                        arcSize,
+                        style = Stroke(stroke * 0.45f, cap = StrokeCap.Round),
+                    )
+                }
+            }
+
+            // End cap glow where the arc currently ends.
+            if (current > 0.02f) {
+                val endAngle = Math.toRadians((START_ANGLE + SWEEP * current).toDouble())
+                val end = Offset(this.center.x + (cos(endAngle) * radius).toFloat(), this.center.y + (sin(endAngle) * radius).toFloat())
+                drawCircle(
+                    Brush.radialGradient(listOf(color.copy(alpha = 0.55f * arcAlpha), Color.Transparent), center = end, radius = stroke * 2.2f),
+                    radius = stroke * 2.2f,
+                    center = end,
+                )
+            }
+
             // Target marker: a ring sitting on the track.
             val tAngle = Math.toRadians((START_ANGLE + SWEEP * target).toDouble())
             val marker = Offset(this.center.x + (cos(tAngle) * radius).toFloat(), this.center.y + (sin(tAngle) * radius).toFloat())
             drawCircle(Color(0xFF0F0D0C), radius = stroke * 0.85f, center = marker)
             drawCircle(Color.White, radius = stroke * 0.85f, center = marker, style = Stroke(stroke * 0.28f))
         }
+        io.github.orth4x0r.venty.ui.Embers(active = pulsing, color = color, modifier = Modifier.fillMaxSize())
+        io.github.orth4x0r.venty.ui.ReadyBurst(trigger = ready, color = color, modifier = Modifier.fillMaxSize())
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
             content()
         }
@@ -139,9 +179,10 @@ fun TemperatureDial(
 }
 
 @Composable
-fun BigTemperature(value: String, unit: String, color: Color) {
+fun BigTemperature(value: Int, unit: String, color: Color) {
+    val animated by androidx.compose.animation.animateColorAsState(color, tween(500), label = "bigTempColor")
     Row(verticalAlignment = Alignment.Top) {
-        Text(value, style = MaterialTheme.typography.displayLarge, color = color)
-        Text("°$unit", style = MaterialTheme.typography.headlineMedium, color = color.copy(alpha = 0.7f), modifier = Modifier.padding(top = 14.dp))
+        io.github.orth4x0r.venty.ui.RollingNumber(value, MaterialTheme.typography.displayLarge, animated)
+        Text("°$unit", style = MaterialTheme.typography.headlineMedium, color = animated.copy(alpha = 0.7f), modifier = Modifier.padding(top = 14.dp))
     }
 }

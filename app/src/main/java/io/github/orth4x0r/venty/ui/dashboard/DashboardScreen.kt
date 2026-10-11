@@ -1,6 +1,27 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import io.github.orth4x0r.venty.ui.AmbientBackground
+import io.github.orth4x0r.venty.ui.RollingNumber
+import io.github.orth4x0r.venty.ui.enterFromBelow
+import io.github.orth4x0r.venty.ui.pressScale
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -31,6 +52,7 @@ import androidx.compose.material.icons.rounded.Battery4Bar
 import androidx.compose.material.icons.rounded.Battery6Bar
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.BatteryFull
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Remove
@@ -89,6 +111,24 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
         else -> "Venty"
     }
 
+    var notice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(controller) {
+        controller.notices.collect { msg ->
+            notice = msg
+            kotlinx.coroutines.delay(3500)
+            if (notice == msg) notice = null
+        }
+    }
+
+    val ambientPhase = status?.let { HeaterPhase.of(it) }
+    AmbientBackground(
+        tint = ambientPhase?.color ?: VentyColors.Heat,
+        intensity = when (ambientPhase) {
+            null -> 0.4f
+            HeaterPhase.Off -> 0.45f
+            else -> 1f
+        },
+    )
     Column(
         Modifier
             .fillMaxSize()
@@ -103,6 +143,9 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
             onDisconnect = controller::disconnect,
             onForget = controller::forgetDevice,
         )
+        AnimatedVisibility(visible = notice != null, enter = expandVertically(), exit = shrinkVertically()) {
+            Banner(notice ?: "", icon = Icons.Rounded.Info)
+        }
         AnimatedVisibility(
             visible = connection is ConnectionState.Reconnecting,
             enter = expandVertically(),
@@ -341,9 +384,9 @@ private fun RepeatButton(
 private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
     val haptics = LocalHapticFeedback.current
     val options = listOf(
-        Triple(HeaterMode.On, "Normal", 0),
-        Triple(HeaterMode.Boost, "Boost", s.boostOffset),
-        Triple(HeaterMode.SuperBoost, "Super", s.boostOffset + s.superBoostOffset),
+        HeaterMode.On to "Normal",
+        HeaterMode.Boost to "Boost",
+        HeaterMode.SuperBoost to "Super",
     )
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -353,8 +396,11 @@ private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
             .background(VentyColors.Surface)
             .padding(6.dp),
     ) {
-        options.forEach { (mode, label, offset) ->
+        options.forEach { (mode, label) ->
             val selected = s.heaterMode == mode
+            // No point offering a boost that can't go any hotter than the mode below it.
+            val lower = if (mode == HeaterMode.SuperBoost) HeaterMode.Boost else HeaterMode.On
+            val maxedOut = mode != HeaterMode.On && !selected && s.targetFor(mode) <= s.targetFor(lower)
             val accent = HeaterPhase.of(s.copy(heaterMode = mode, setpointReached = false)).let {
                 if (mode == HeaterMode.On) VentyColors.Heat else it.color
             }
@@ -366,7 +412,8 @@ private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
                     .weight(1f)
                     .clip(RoundedCornerShape(14.dp))
                     .background(bg)
-                    .clickable(enabled = !selected) {
+                    .graphicsLayer { alpha = if (maxedOut) 0.4f else 1f }
+                    .clickable(enabled = !selected && !maxedOut) {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onMode(mode)
                     }
@@ -374,7 +421,7 @@ private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
             ) {
                 Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
                 Text(
-                    "${Temperature.toDisplay(s.targetTenths + offset * 10, s.fahrenheit)}°",
+                    if (maxedOut) "max" else "${Temperature.toDisplay(s.targetFor(mode), s.fahrenheit)}°",
                     style = MaterialTheme.typography.bodySmall,
                     color = fg.copy(alpha = 0.8f),
                 )
@@ -386,20 +433,59 @@ private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
 @Composable
 private fun HeaterButton(on: Boolean, onToggle: () -> Unit) {
     val haptics = LocalHapticFeedback.current
-    val container by animateColorAsState(if (on) VentyColors.SurfaceHigh else VentyColors.Heat, label = "heaterBg")
+    val interaction = remember { MutableInteractionSource() }
+    val fill by animateFloatAsState(if (on) 0f else 1f, tween(450), label = "heaterFill")
     val content by animateColorAsState(if (on) VentyColors.Heat else Color(0xFF1A0D05), label = "heaterFg")
-    Button(
-        onClick = {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            onToggle()
-        },
-        shape = RoundedCornerShape(24.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
-        modifier = Modifier.fillMaxWidth().height(68.dp),
+    val iconTurn by animateFloatAsState(if (on) 180f else 0f, spring(dampingRatio = 0.6f), label = "iconTurn")
+    val shape = RoundedCornerShape(24.dp)
+    Row(
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(68.dp)
+            .pressScale(interaction, 0.97f)
+            .drawBehind {
+                // Glow under the button when it's the call to action.
+                if (fill > 0.01f) {
+                    drawRoundRect(
+                        Brush.radialGradient(
+                            listOf(VentyColors.Heat.copy(alpha = 0.35f * fill), Color.Transparent),
+                            center = Offset(size.width / 2, size.height),
+                            radius = size.width * 0.6f,
+                        ),
+                        topLeft = Offset(-40f, -20f),
+                        size = Size(size.width + 80f, size.height + 60f),
+                    )
+                }
+            }
+            .clip(shape)
+            .background(VentyColors.SurfaceHigh)
+            .background(
+                Brush.horizontalGradient(
+                    listOf(VentyColors.Ember.copy(alpha = fill), VentyColors.Heat.copy(alpha = fill), Color(0xFFFF5A2A).copy(alpha = fill)),
+                ),
+            )
+            .border(1.dp, VentyColors.Heat.copy(alpha = 0.35f * (1f - fill)), shape)
+            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple()) {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                onToggle()
+            },
     ) {
-        Icon(Icons.Rounded.PowerSettingsNew, contentDescription = null)
+        Icon(
+            Icons.Rounded.PowerSettingsNew,
+            contentDescription = null,
+            tint = content,
+            modifier = Modifier.graphicsLayer { rotationZ = iconTurn },
+        )
         Spacer(Modifier.width(10.dp))
-        Text(if (on) "Turn heater off" else "Start heating", style = MaterialTheme.typography.titleMedium)
+        AnimatedContent(
+            targetState = on,
+            transitionSpec = { (fadeIn(tween(200)) + slideInVertically { it / 2 }) togetherWith (fadeOut(tween(150)) + slideOutVertically { -it / 2 }) },
+            label = "heaterLabel",
+        ) { isOn ->
+            Text(if (isOn) "Turn heater off" else "Start heating", style = MaterialTheme.typography.titleMedium, color = content)
+        }
     }
 }
 
@@ -453,10 +539,12 @@ private fun InfoRow(s: VentyStatus, info: DeviceInfo) {
 
 @Composable
 private fun InfoTile(label: String, value: String, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(20.dp)
     Column(
         modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(VentyColors.Surface)
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh, VentyColors.Surface)))
+            .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.07f), Color.Transparent)), shape)
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = VentyColors.Muted)
@@ -524,7 +612,7 @@ private fun BatteryBadge(percent: Int, charging: Boolean) {
 }
 
 @Composable
-private fun Banner(text: String) {
+private fun Banner(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Rounded.Sync) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -534,7 +622,7 @@ private fun Banner(text: String) {
             .background(VentyColors.Warning.copy(alpha = 0.12f))
             .padding(14.dp),
     ) {
-        Icon(Icons.Rounded.Sync, null, tint = VentyColors.Warning)
+        Icon(icon, null, tint = VentyColors.Warning)
         Spacer(Modifier.width(12.dp))
         Text(text, style = MaterialTheme.typography.bodyMedium, color = VentyColors.Warning)
     }
@@ -558,11 +646,13 @@ private fun ConnectingPlaceholder(name: String, onCancel: () -> Unit) {
 
 @Composable
 private fun Card(content: @Composable () -> Unit) {
+    val shape = RoundedCornerShape(24.dp)
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(VentyColors.Surface)
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh, VentyColors.Surface)))
+            .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)), shape)
             .padding(20.dp),
     ) { content() }
 }

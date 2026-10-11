@@ -134,13 +134,18 @@ data class VentyStatus(
     val fahrenheit: Boolean,
     val setpointReached: Boolean,
 ) {
-    /** What the heater is actually aiming for, including any active boost. */
+    /** What the heater is actually aiming for, including any active boost. The Venty tops out at 210 °C. */
     val effectiveTargetTenths: Int
-        get() = targetTenths + when (heaterMode) {
+        get() = targetFor(heaterMode)
+
+    fun targetFor(mode: HeaterMode): Int = minOf(
+        VentyProtocol.MAX_TARGET,
+        targetTenths + when (mode) {
             HeaterMode.Boost -> boostOffset * 10
             HeaterMode.SuperBoost -> (boostOffset + superBoostOffset) * 10
             else -> 0
-        }
+        },
+    )
 }
 
 internal fun ByteArray.u8(i: Int): Int = this[i].toInt() and 0xFF

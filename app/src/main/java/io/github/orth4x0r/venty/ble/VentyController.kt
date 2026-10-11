@@ -17,7 +17,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -29,7 +32,9 @@ private const val USAGE_EVERY_TICKS = 31
 private const val STALE_AFTER_MS = 2_500L
 private const val SCAN_TIMEOUT_MS = 20_000L
 private const val WRITE_DEBOUNCE_MS = 250L
-private const val PENDING_HOLD_MS = 2_500L
+// How long an optimistic value is shown before the device's own report wins. Two polls is enough
+// for the write to land; longer makes refused changes flicker between the two values.
+private const val PENDING_HOLD_MS = 1_100L
 
 data class FoundDevice(val address: String, val name: String, val rssi: Int)
 
@@ -62,6 +67,10 @@ class VentyController(context: Context) {
     /** Latest device status with any not-yet-confirmed user changes applied on top. */
     private val _status = MutableStateFlow<VentyStatus?>(null)
     val status: StateFlow<VentyStatus?> = _status.asStateFlow()
+
+    /** One-off messages for the user, e.g. when the Venty refuses a mode change. */
+    private val _notices = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val notices: SharedFlow<String> = _notices.asSharedFlow()
 
     private val _info = MutableStateFlow(DeviceInfo())
     val info: StateFlow<DeviceInfo> = _info.asStateFlow()
@@ -262,8 +271,16 @@ class VentyController(context: Context) {
             else shown = shown.copy(targetTenths = value)
         }
         pendingHeater?.let { (mode, at) ->
-            if (device.heaterMode == mode || now - at > PENDING_HOLD_MS) pendingHeater = null
-            else shown = shown.copy(heaterMode = mode)
+            when {
+                device.heaterMode == mode -> pendingHeater = null
+                now - at > PENDING_HOLD_MS -> {
+                    pendingHeater = null
+                    if (mode == HeaterMode.Boost || mode == HeaterMode.SuperBoost) {
+                        _notices.tryEmit("The Venty didn't accept ${if (mode == HeaterMode.Boost) "boost" else "superboost"}")
+                    }
+                }
+                else -> shown = shown.copy(heaterMode = mode)
+            }
         }
         pendingBoost?.let { (value, at) ->
             if (device.boostOffset == value || now - at > PENDING_HOLD_MS) pendingBoost = null

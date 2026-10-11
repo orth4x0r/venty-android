@@ -50,6 +50,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.orth4x0r.venty.ble.ConnectionState
 import io.github.orth4x0r.venty.ble.FoundDevice
+import io.github.orth4x0r.venty.ui.AmbientBackground
+import io.github.orth4x0r.venty.ui.enterFromBelow
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 
 @Composable
@@ -150,7 +152,7 @@ private fun DeviceRow(device: FoundDevice, onClick: () -> Unit) {
             .fillMaxWidth()
             .height(64.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(VentyColors.Surface)
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(VentyColors.SurfaceHigh, VentyColors.Surface)))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp),
     ) {
@@ -199,11 +201,18 @@ fun PrimaryButton(text: String, onClick: () -> Unit, icon: (@Composable () -> Un
 
 @Composable
 private fun CenteredPage(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize()) {
+    AmbientBackground(tint = VentyColors.Heat, intensity = 0.6f)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 28.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .safeDrawingPadding()
+            .padding(horizontal = 28.dp)
+            .enterFromBelow(0),
     ) { content() }
+    }
 }
 
 /** The app's mark: a heat arc that sweeps round while searching. */
@@ -222,7 +231,24 @@ private fun HeroMark(animate: Boolean) {
         animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
         label = "glow",
     )
+    val ring by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing), RepeatMode.Restart),
+        label = "ring",
+    )
     Canvas(Modifier.size(140.dp)) {
+        if (animate) {
+            // Radar rings rippling outwards while searching.
+            for (i in 0..2) {
+                val p = (ring + i / 3f) % 1f
+                drawCircle(
+                    VentyColors.Heat.copy(alpha = (1f - p) * 0.35f),
+                    radius = size.minDimension / 2 * (0.6f + p * 0.9f),
+                    style = Stroke(2.dp.toPx()),
+                )
+            }
+        }
         val stroke = 12.dp.toPx()
         val inset = stroke / 2 + 10.dp.toPx()
         val arcSize = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height - inset * 2)
