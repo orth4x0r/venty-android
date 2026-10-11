@@ -83,7 +83,7 @@ Request packets: the app sends 20-byte zero-filled packets for most commands and
 |---|---|---|
 | 0 | `0x01` | |
 | 1 | mask / status | |
-| 2–3 | current temperature | u16 LE, ×10 °C. `0x8000` = not available (heater cold / off) |
+| 2–3 | current temperature | u16 LE, ×10 °C. `0x8000` = not available. Reportedly **always** `0x8000` on the Venty (see note below) |
 | 4–5 | target temperature | u16 LE, ×10 °C. The base setpoint, without boost |
 | 6 | boost offset | °C added in boost mode |
 | 7 | superboost offset | °C added on top of boost in superboost mode |
@@ -138,14 +138,17 @@ Factory reset           01 80 … byte 14 = 04, byte 15 = 04
 Notes:
 
 - **Target temperature is the base setpoint.** When the device is in boost or superboost, the vendor app shows target + offsets, and before writing a new target it subtracts the active offsets again. Do the same: keep the UI's "effective" temperature separate from the value written.
-- **Boost / superboost from the app.** The official app only ever writes heater mode 0 or 1 (power toggle); boost and superboost are normally entered with the device button and then reported in byte 11. szv99/storz-bickel-ble writes 2 and 3 directly. Whether the device accepts that is **unverified**.
-- **Ranges.** The app does not clamp target or offsets. The Venty's published range is 40–210 °C; clamp in the client. Offset limits are **unverified**; read them back after writing.
+- **No live temperature on the Venty.** firsttris/reactive-volcano-app reports that the Venty never fills bytes 2–3 (always `0x8000`). Show the effective target with a heating / reached state (settings flag bit 1) instead of a live reading. **Unverified** by this project.
+- **Boost / superboost from the app.** The official app only ever writes heater mode 0 or 1 (power toggle); boost and superboost are normally entered with the device button and then reported in byte 11. szv99/storz-bickel-ble and firsttris/reactive-volcano-app both write 2 and 3 directly, which suggests the device accepts it. Still **unverified** here.
+- **Ranges.** The app does not clamp target or offsets. The Venty's published range is 40–210 °C; clamp in the client. Boost and superboost offsets reportedly range 1–99 °C (reactive-volcano-app); read them back after writing.
+- **Leaving boost.** Tested on a real Venty (2026-10-11): boost can be entered by writing mode 2, but writing mode 1 (alone, or with the target) does **not** end it. The official app (v3.4.1) never writes 1 while heating; its power button writes 0 in any heating mode. Ending boost from a client therefore means writing 0 and then 1, or waiting for the boost timeout. Superboost (mode 3) is boost plus superboost: the offsets stack.
+- **Boost timeout.** Boost ends after about 90 s unless "permanent boost" is on, which is the boost-timeout-disabled flag in cmd `0x06` byte 6.
 - The factory-reset flow in the app also sets the setpoint to 180 °C.
 - BLE permanent (settings2 bit 0) is exposed in the app for Veazy only. Whether a Venty honours it is **unverified**.
 
 ### 5.2 `0x02` firmware
 
-Response: byte 1 = application-firmware flags (`0x01` application running, `0x10` invalid application, `0x20` invalid bootloader); bytes 2–7 = firmware version, ASCII (e.g. `V01.11`).
+Response: byte 1 = application-firmware flags (`0x01` application running, `0x10` invalid application, `0x20` invalid bootloader); bytes 2–7 = firmware version, ASCII (e.g. `V01.11`); bytes 11–16 = bootloader version, ASCII (per reactive-volcano-app).
 
 ### 5.3 `0x04` usage statistics
 
@@ -176,6 +179,8 @@ Re-read with a bare `0x06` after writing; the device answers with the new values
 
 ### 5.6 `0x0D` find my device
 
+reactive-volcano-app notes this may not work on the Venty (**unverified**).
+
 Request: `0D 01` (20 bytes). The device vibrates / flashes. The `0x1D` response has bit 4 of byte 1 set while find-my is active.
 
 ### 5.7 `0x03` / `0x23` analysis
@@ -200,4 +205,5 @@ The device has no puff counter, but one can be derived (szv99/storz-bickel-ble, 
 - Official web app, `https://app.storz-bickel.com/js/qvap.js` and `/js/main.js` (fetched 2026-10-11). Primary source for UUIDs, command bytes, masks and packet layouts.
 - [szv99/storz-bickel-ble](https://github.com/szv99/storz-bickel-ble) (MIT), `protocols/qvap.py`, `puff.py`, `discovery.py`. Matches the official app on every point checked.
 - [lorek123/snb-ble](https://github.com/lorek123/snb-ble) (MIT), `venty.py`, `protocol.py`, `s&b_procol.md`. Useful, but has the service UUID and find-device byte wrong and omits the settings write mask in byte 15.
+- [firsttris/reactive-volcano-app](https://github.com/firsttris/reactive-volcano-app) (AGPL; facts only, no code borrowed). Source of the no-live-temperature, offset range, boost timeout and bootloader-version notes.
 - [nicandris/ha-snb](https://github.com/nicandris/ha-snb), Home Assistant integration built on lorek123's library.

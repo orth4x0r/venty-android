@@ -1,0 +1,170 @@
+package io.github.orth4x0r.venty.ble
+
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
+import android.content.Context
+import android.os.Build
+import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+
+private const val TAG = "GattLink"
+private const val CONNECT_TIMEOUT_MS = 12_000L
+private const val OP_TIMEOUT_MS = 3_000L
+
+/**
+ * A BLE connection to the Venty's single control characteristic.
+ *
+ * Android allows one outstanding GATT operation at a time, so every write goes through [opLock]
+ * and waits for its callback before the next one starts.
+ */
+@SuppressLint("MissingPermission") // Callers only reach this after BLUETOOTH_CONNECT is granted.
+class GattLink private constructor() : VentyLink {
+
+    private lateinit var gatt: BluetoothGatt
+    private lateinit var control: BluetoothGattCharacteristic
+    private var writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+
+    private val notifications = Channel<ByteArray>(Channel.UNLIMITED)
+    override val incoming: Flow<ByteArray> = notifications.receiveAsFlow()
+
+    private val connected = CompletableDeferred<Unit>()
+    private val opLock = Mutex()
+    @Volatile private var pendingOp: CompletableDeferred<Int>? = null
+    @Volatile private var closed = false
+
+    private val callback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            Log.d(TAG, "connection state $newState status $status")
+            if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                connected.complete(Unit)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+                val error = LinkLostException("Disconnected (status $status)")
+                connected.completeExceptionally(error)
+                pendingOp?.completeExceptionally(error)
+                notifications.close(error)
+            }
+        }
+
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            pendingOp?.complete(status)
+        }
+
+        override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            pendingOp?.complete(status)
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            pendingOp?.complete(status)
+        }
+
+        // API 33+
+        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
+            if (c.uuid == VentyProtocol.CONTROL_UUID) notifications.trySend(value.copyOf())
+        }
+
+        // API 32 and below
+        @Deprecated("Deprecated in Java")
+        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
+            if (Build.VERSION.SDK_INT >= 33) return
+            @Suppress("DEPRECATION")
+            val value = c.value ?: return
+            if (c.uuid == VentyProtocol.CONTROL_UUID) notifications.trySend(value.copyOf())
+        }
+    }
+
+    override suspend fun send(packet: ByteArray) {
+        runOp("write") { writeControl(packet) }
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        notifications.close()
+        if (::gatt.isInitialized) {
+            runCatching { gatt.disconnect() }
+            runCatching { gatt.close() }
+        }
+    }
+
+    private suspend fun open(context: Context, device: BluetoothDevice) {
+        gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+            ?: throw LinkLostException("connectGatt returned null")
+        // withTimeoutOrNull, not withTimeout: its exception is a CancellationException, which would
+        // end the reconnect loop instead of triggering a retry.
+        withTimeoutOrNull(CONNECT_TIMEOUT_MS) { connected.await() } ?: throw LinkLostException("Connection timed out")
+
+        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        runOp("discover services") { gatt.discoverServices() }
+
+        val service = gatt.getService(VentyProtocol.SERVICE_UUID)
+            ?: throw LinkLostException("Venty service not found. Is this a Venty?")
+        control = service.getCharacteristic(VentyProtocol.CONTROL_UUID)
+            ?: throw LinkLostException("Venty control characteristic not found")
+        if (control.properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0) {
+            writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        }
+
+        gatt.setCharacteristicNotification(control, true)
+        val cccd = control.getDescriptor(VentyProtocol.CCCD_UUID)
+            ?: throw LinkLostException("Notification descriptor missing")
+        runOp("enable notifications") { writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) }
+    }
+
+    /** Starts one GATT operation and suspends until its callback reports success. */
+    private suspend fun runOp(name: String, start: () -> Boolean) = opLock.withLock {
+        if (closed) throw LinkLostException("Link closed")
+        val op = CompletableDeferred<Int>()
+        pendingOp = op
+        try {
+            if (!start()) throw LinkLostException("Could not start $name")
+            val status = withTimeoutOrNull(OP_TIMEOUT_MS) { op.await() } ?: throw LinkLostException("$name timed out")
+            if (status != BluetoothGatt.GATT_SUCCESS) throw LinkLostException("$name failed (status $status)")
+        } finally {
+            pendingOp = null
+        }
+    }
+
+    private fun writeControl(value: ByteArray): Boolean =
+        if (Build.VERSION.SDK_INT >= 33) {
+            gatt.writeCharacteristic(control, value, writeType) == BluetoothStatusCodes.SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            control.writeType = writeType
+            @Suppress("DEPRECATION")
+            control.setValue(value) && gatt.writeCharacteristic(control)
+        }
+
+    private fun writeDescriptor(d: BluetoothGattDescriptor, value: ByteArray): Boolean =
+        if (Build.VERSION.SDK_INT >= 33) {
+            gatt.writeDescriptor(d, value) == BluetoothStatusCodes.SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            d.setValue(value) && gatt.writeDescriptor(d)
+        }
+
+    companion object {
+        /** Connects, discovers the Venty service and enables notifications. Throws on failure. */
+        suspend fun connect(context: Context, device: BluetoothDevice): GattLink {
+            val link = GattLink()
+            try {
+                link.open(context.applicationContext, device)
+            } catch (t: Throwable) {
+                link.close()
+                throw t
+            }
+            return link
+        }
+    }
+}

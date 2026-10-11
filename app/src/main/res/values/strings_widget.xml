@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_label">Venty</string>
+    <string name="widget_description">Heater state and target temperature at a glance. Tap the power button to switch the heater on or off.</string>
+    <string name="widget_open_app">Open Venty</string>
+    <string name="widget_power_desc">Switch heater on or off</string>
+    <string name="widget_placeholder">––</string>
+    <string name="widget_battery">%1$d%%</string>
+    <string name="widget_battery_unknown">––%</string>
+    <string name="widget_state_ready">Ready</string>
+    <string name="widget_state_heating">Heating</string>
+    <string name="widget_state_boost">Boost</string>
+    <string name="widget_state_off">Off</string>
+    <string name="widget_state_not_connected">Not connected</string>
+</resources>
