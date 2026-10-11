@@ -30,6 +30,9 @@ class DemoLink : VentyLink {
     private var tempTenths = 240.0
     private var autoOffTicks = 0
     private var heatTicks = 0
+    private var brightness = 6
+    private var vibration = true
+    private var boostTimeoutDisabled = false
     private var state = VentyStatus(
         currentTenths = null,
         targetTenths = 1850,
@@ -64,6 +67,18 @@ class DemoLink : VentyLink {
                     byteArrayOf(0x02, 0x01) + "DEMO01".toByteArray(Charsets.US_ASCII) + ByteArray(12)
                 )
                 VentyProtocol.CMD_USAGE -> out.trySend(byteArrayOf(0x04, 0x2C, 0x01, 0x00) + ByteArray(16))
+                VentyProtocol.CMD_DEVICE_SETTINGS -> {
+                    val mask = packet.u8(1)
+                    if (mask and 0x01 != 0) brightness = packet.u8(2)
+                    if (mask and 0x08 != 0) vibration = packet.u8(5) != 0
+                    if (mask and 0x10 != 0) boostTimeoutDisabled = packet.u8(6) != 0
+                    out.trySend(
+                        byteArrayOf(
+                            0x06, 0x00, brightness.toByte(), 0, 0,
+                            (if (vibration) 1 else 0).toByte(), (if (boostTimeoutDisabled) 1 else 0).toByte(),
+                        ),
+                    )
+                }
             }
         }
     }
@@ -78,6 +93,17 @@ class DemoLink : VentyLink {
         if (mask and VentyProtocol.MASK_TARGET != 0 && p.u16(4) != state.targetTenths) {
             state = state.copy(targetTenths = p.u16(4), setpointReached = false)
             autoOffTicks = AUTO_OFF_SECONDS * TICKS_PER_SECOND
+        }
+        if (mask and 0x80 != 0) {
+            val bits = p.u8(15)
+            val value = p.u8(14)
+            fun pick(bit: Int, old: Boolean) = if (bits and bit != 0) value and bit != 0 else old
+            state = state.copy(
+                fahrenheit = pick(VentyProtocol.SETTING_FAHRENHEIT, state.fahrenheit),
+                ecoChargeOptimization = pick(VentyProtocol.SETTING_ECO_CHARGE, state.ecoChargeOptimization),
+                ecoVoltageLimit = pick(VentyProtocol.SETTING_ECO_VOLTAGE, state.ecoVoltageLimit),
+                boostVisualization = pick(VentyProtocol.SETTING_BOOST_VISUALIZATION, state.boostVisualization),
+            )
         }
         if (mask and VentyProtocol.MASK_BOOST != 0) state = state.copy(boostOffset = p.u8(6))
         if (mask and VentyProtocol.MASK_SUPERBOOST != 0) state = state.copy(superBoostOffset = p.u8(7))

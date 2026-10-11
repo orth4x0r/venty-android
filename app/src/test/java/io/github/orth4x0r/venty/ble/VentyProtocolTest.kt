@@ -131,4 +131,67 @@ class VentyProtocolTest {
         assertFalse(VentyProtocol.isVentyName("S&B VZ123456"))
         assertFalse(VentyProtocol.isVentyName(null))
     }
+
+    @Test
+    fun `settings writes match the documented packets`() {
+        assertArrayEquals(padded(0x01, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x01), VentyProtocol.setSetting(VentyProtocol.SETTING_FAHRENHEIT, true))
+        assertArrayEquals(padded(0x01, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01), VentyProtocol.setSetting(VentyProtocol.SETTING_FAHRENHEIT, false))
+        assertArrayEquals(padded(0x01, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x08, 0x08), VentyProtocol.setSetting(VentyProtocol.SETTING_ECO_CHARGE, true))
+        assertArrayEquals(padded(0x01, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x20), VentyProtocol.setSetting(VentyProtocol.SETTING_ECO_VOLTAGE, true))
+        assertArrayEquals(padded(0x01, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x40), VentyProtocol.setSetting(VentyProtocol.SETTING_BOOST_VISUALIZATION, false))
+    }
+
+    @Test
+    fun `device settings read and writes match the documented packets`() {
+        assertArrayEquals(bytes(0x06, 0, 0, 0, 0, 0, 0), VentyProtocol.readDeviceSettings())
+        assertArrayEquals(bytes(0x06, 0x01, 0x09, 0x00, 0x00, 0x00, 0x00), VentyProtocol.setBrightness(9))
+        assertArrayEquals(bytes(0x06, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00), VentyProtocol.setVibration(true))
+        assertArrayEquals(bytes(0x06, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00), VentyProtocol.setVibration(false))
+        assertArrayEquals(bytes(0x06, 0x10, 0x00, 0x00, 0x00, 0x00, 0x01), VentyProtocol.setBoostTimeoutDisabled(true))
+    }
+
+    @Test
+    fun `brightness is clamped to 1 through 9`() {
+        assertEquals(9, VentyProtocol.setBrightness(40).u8(2))
+        assertEquals(1, VentyProtocol.setBrightness(0).u8(2))
+    }
+
+    @Test
+    fun `parses device settings`() {
+        val s = VentyProtocol.parseDeviceSettings(bytes(0x06, 0x00, 0x05, 0x00, 0x00, 0x01, 0x01))!!
+        assertEquals(DeviceSettings(brightness = 5, vibration = true, boostTimeoutDisabled = true), s)
+        val off = VentyProtocol.parseDeviceSettings(bytes(0x06, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00))!!
+        assertEquals(DeviceSettings(9, vibration = false, boostTimeoutDisabled = false), off)
+        assertNull(VentyProtocol.parseDeviceSettings(bytes(0x06, 0x00, 0x05)))
+        assertNull(VentyProtocol.parseDeviceSettings(bytes(0x07, 0, 5, 0, 0, 0, 0)))
+    }
+
+    @Test
+    fun `find my device is 0D 01`() {
+        assertArrayEquals(padded(0x0D, 0x01), VentyProtocol.findMyDevice())
+    }
+
+    @Test
+    fun `parses eco and boost visualisation flags`() {
+        val s = VentyProtocol.parseStatus(padded(0x01, 0, 0, 0x80, 0x3A, 0x07, 15, 10, 50, 0, 0, 0, 0, 0, 0x69))!!
+        assertTrue(s.fahrenheit)
+        assertTrue(s.ecoChargeOptimization)
+        assertTrue(s.ecoVoltageLimit)
+        assertTrue(s.boostVisualization)
+        assertFalse(s.setpointReached)
+        val none = VentyProtocol.parseStatus(padded(0x01, 0, 0, 0x80, 0x3A, 0x07, 15, 10, 50))!!
+        assertFalse(none.ecoChargeOptimization || none.ecoVoltageLimit || none.boostVisualization)
+    }
+
+    @Test
+    fun `round trip keeps the settings flags`() {
+        val s = VentyStatus(
+            currentTenths = null, targetTenths = 1900, boostOffset = 12, superBoostOffset = 8,
+            battery = 55, autoOffSeconds = 300, heaterMode = HeaterMode.On,
+            charging = true, fahrenheit = false, setpointReached = true,
+            ecoChargeOptimization = true, ecoVoltageLimit = true, boostVisualization = true,
+        )
+        assertEquals(s, VentyProtocol.parseStatus(VentyProtocol.encodeStatus(s)))
+        assertEquals(0x6A, VentyProtocol.encodeStatus(s).u8(14))
+    }
 }

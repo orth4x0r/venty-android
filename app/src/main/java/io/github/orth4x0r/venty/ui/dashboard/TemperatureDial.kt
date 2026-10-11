@@ -32,6 +32,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 import io.github.orth4x0r.venty.ble.VentyProtocol
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.atan2
+import kotlin.math.roundToInt
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -60,8 +66,11 @@ fun TemperatureDial(
     /** 0 off, 1 normal heating, 2 boost, 3 superboost: drives how wild the effects get. */
     energy: Int = 0,
     modifier: Modifier = Modifier,
+    /** Called with the temperature under the finger while the ring is dragged, null on release. */
+    onDrag: ((Int?) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    val drag by rememberUpdatedState(onDrag)
     val current by animateFloatAsState(
         fraction(currentTenths),
         // A little overshoot makes the arc "ignite" when the heater turns on.
@@ -93,7 +102,28 @@ fun TemperatureDial(
     )
     val arcAlpha by animateFloatAsState(if (dimArc) 0.45f else 1f, tween(600), label = "arcAlpha")
 
-    Box(modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
+    val dragModifier = if (onDrag == null) Modifier else Modifier.pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val c = Offset(size.width / 2f, size.height / 2f)
+            val r = size.width / 2f
+            // Only the ring is grabbable, so the middle of the dial still scrolls the page.
+            val d = (down.position - c).getDistance()
+            if (d < r * 0.55f || d > r * 1.05f) return@awaitEachGesture
+            down.consume()
+            drag?.invoke(tenthsAt(down.position, c))
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+                change.consume()
+                drag?.invoke(tenthsAt(change.position, c))
+            }
+            drag?.invoke(null)
+        }
+    }
+
+    Box(modifier.fillMaxWidth().aspectRatio(1f).then(dragModifier), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val stroke = size.minDimension * 0.06f
             val inset = stroke / 2 + size.minDimension * 0.06f
@@ -211,6 +241,19 @@ fun TemperatureDial(
             content()
         }
     }
+}
+
+/** Maps a point on the dial to a target in tenths of °C, clamping the gap at the bottom. */
+private fun tenthsAt(p: Offset, c: Offset): Int {
+    val deg = Math.toDegrees(atan2((p.y - c.y).toDouble(), (p.x - c.x).toDouble())).toFloat()
+    val rel = ((deg - START_ANGLE) % 360f + 360f) % 360f
+    val f = when {
+        rel <= SWEEP -> rel / SWEEP
+        rel > SWEEP + (360f - SWEEP) / 2 -> 0f
+        else -> 1f
+    }
+    val span = VentyProtocol.MAX_TARGET - VentyProtocol.MIN_TARGET
+    return VentyProtocol.MIN_TARGET + (f * span).roundToInt()
 }
 
 @Composable

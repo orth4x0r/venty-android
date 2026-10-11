@@ -1,6 +1,14 @@
 package io.github.orth4x0r.venty.ui.theme
 
+import android.os.Build
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -20,8 +28,14 @@ object VentyColors {
     val OnSurface = Color(0xFFF4ECE6)
     val Muted = Color(0xFF9C8F86)
 
-    val Heat = Color(0xFFFF7A3D)
-    val Ember = Color(0xFFFFB27A)
+    val DefaultHeat = Color(0xFFFF7A3D)
+    val DefaultEmber = Color(0xFFFFB27A)
+
+    // Backed by state so the wallpaper-colour option can retint the whole app live.
+    var Heat by mutableStateOf(DefaultHeat)
+        internal set
+    var Ember by mutableStateOf(DefaultEmber)
+        internal set
     val Cool = Color(0xFF6FA8FF)
     val Ready = Color(0xFF7CE0A3)
     val Boost = Color(0xFFFF4D4D)
@@ -29,7 +43,7 @@ object VentyColors {
     val Warning = Color(0xFFFFC857)
 }
 
-private val colors = darkColorScheme(
+private fun colors() = darkColorScheme(
     primary = VentyColors.Heat,
     onPrimary = Color(0xFF1A0D05),
     secondary = VentyColors.Ember,
@@ -55,9 +69,25 @@ private val typography = base.copy(
     labelLarge = base.labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp),
 )
 
+/**
+ * With [dynamicColor] on Android 12+, the heat accent comes from the wallpaper (Material You);
+ * otherwise it's the stock orange. State colours (ready, boost, cool) stay fixed so they keep
+ * their meaning.
+ */
 @Composable
-fun VentyTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = colors, typography = typography) {
+fun VentyTheme(dynamicColor: Boolean = false, content: @Composable () -> Unit) {
+    val context = LocalContext.current
+    val (heat, ember) = remember(dynamicColor) {
+        if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val scheme = dynamicDarkColorScheme(context)
+            scheme.primary to lerp(scheme.primary, Color.White, 0.35f)
+        } else {
+            VentyColors.DefaultHeat to VentyColors.DefaultEmber
+        }
+    }
+    VentyColors.Heat = heat
+    VentyColors.Ember = ember
+    MaterialTheme(colorScheme = colors(), typography = typography) {
         // There is no root Surface, so without this Text and Icon fall back to black.
         CompositionLocalProvider(LocalContentColor provides VentyColors.OnSurface, content = content)
     }

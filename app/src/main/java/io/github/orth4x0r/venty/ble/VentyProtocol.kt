@@ -17,6 +17,19 @@ object VentyProtocol {
     const val CMD_STATUS: Byte = 0x01
     const val CMD_FIRMWARE: Byte = 0x02
     const val CMD_USAGE: Byte = 0x04
+    const val CMD_DEVICE_SETTINGS: Byte = 0x06
+    const val CMD_FIND_MY: Byte = 0x0D
+
+    /** Settings flag bits (cmd 0x01, byte 14), also used as write masks (byte 15). */
+    const val SETTING_FAHRENHEIT = 0x01
+    const val SETTING_ECO_CHARGE = 0x08
+    const val SETTING_ECO_VOLTAGE = 0x20
+    const val SETTING_BOOST_VISUALIZATION = 0x40
+
+    const val MIN_BRIGHTNESS = 1
+    const val MAX_BRIGHTNESS = 9
+
+    private const val SETTINGS_PACKET_SIZE = 7
 
     const val MASK_TARGET = 0x02
     const val MASK_BOOST = 0x04
@@ -60,6 +73,30 @@ object VentyProtocol {
         it[11] = mode.code.toByte()
     }
 
+    /** Writes one settings flag from byte 14: byte 14 holds the value, byte 15 the bit to change. */
+    fun setSetting(bit: Int, enabled: Boolean): ByteArray = packet(CMD_STATUS).also {
+        it[1] = 0x80.toByte()
+        it[14] = (if (enabled) bit else 0).toByte()
+        it[15] = bit.toByte()
+    }
+
+    fun readDeviceSettings(): ByteArray = ByteArray(SETTINGS_PACKET_SIZE).also { it[0] = CMD_DEVICE_SETTINGS }
+
+    fun setBrightness(level: Int): ByteArray = settingsPacket(0x01).also {
+        it[2] = level.coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS).toByte()
+    }
+
+    fun setVibration(enabled: Boolean): ByteArray = settingsPacket(0x08).also {
+        it[5] = if (enabled) 1 else 0
+    }
+
+    fun setBoostTimeoutDisabled(disabled: Boolean): ByteArray = settingsPacket(0x10).also {
+        it[6] = if (disabled) 1 else 0
+    }
+
+    /** Makes the device vibrate / flash. May not work on every Venty. */
+    fun findMyDevice(): ByteArray = packet(CMD_FIND_MY).also { it[1] = 0x01 }
+
     /**
      * Sets the heater mode and the base target in one write. Used to leave boost: on a real
      * Venty, writing mode 1 alone left it at the boosted temperature.
@@ -87,6 +124,19 @@ object VentyProtocol {
             charging = data.u8(13) != 0,
             fahrenheit = flags and 0x01 != 0,
             setpointReached = flags and 0x02 != 0,
+            ecoChargeOptimization = flags and SETTING_ECO_CHARGE != 0,
+            ecoVoltageLimit = flags and SETTING_ECO_VOLTAGE != 0,
+            boostVisualization = flags and SETTING_BOOST_VISUALIZATION != 0,
+        )
+    }
+
+    /** Decodes a `0x06` response, or returns null if [data] is not a device settings packet. */
+    fun parseDeviceSettings(data: ByteArray): DeviceSettings? {
+        if (data.size < SETTINGS_PACKET_SIZE || data[0] != CMD_DEVICE_SETTINGS) return null
+        return DeviceSettings(
+            brightness = data.u8(2).coerceIn(MIN_BRIGHTNESS, MAX_BRIGHTNESS),
+            vibration = data.u8(5) != 0,
+            boostTimeoutDisabled = data.u8(6) != 0,
         )
     }
 
@@ -102,7 +152,13 @@ object VentyProtocol {
         it[10] = (secs - minOf(secs, 255)).toByte()
         it[11] = s.heaterMode.code.toByte()
         it[13] = if (s.charging) 1 else 0
-        it[14] = ((if (s.fahrenheit) 0x01 else 0) or (if (s.setpointReached) 0x02 else 0)).toByte()
+        it[14] = (
+            (if (s.fahrenheit) SETTING_FAHRENHEIT else 0) or
+                (if (s.setpointReached) 0x02 else 0) or
+                (if (s.ecoChargeOptimization) SETTING_ECO_CHARGE else 0) or
+                (if (s.ecoVoltageLimit) SETTING_ECO_VOLTAGE else 0) or
+                (if (s.boostVisualization) SETTING_BOOST_VISUALIZATION else 0)
+            ).toByte()
     }
 
     /** Firmware version string from a `0x02` response, e.g. "V01.11". */
@@ -118,6 +174,11 @@ object VentyProtocol {
     }
 
     private fun packet(cmd: Byte) = ByteArray(PACKET_SIZE).also { it[0] = cmd }
+
+    private fun settingsPacket(mask: Int) = ByteArray(SETTINGS_PACKET_SIZE).also {
+        it[0] = CMD_DEVICE_SETTINGS
+        it[1] = mask.toByte()
+    }
 }
 
 enum class HeaterMode(val code: Int) {
@@ -143,6 +204,9 @@ data class VentyStatus(
     val charging: Boolean,
     val fahrenheit: Boolean,
     val setpointReached: Boolean,
+    val ecoChargeOptimization: Boolean = false,
+    val ecoVoltageLimit: Boolean = false,
+    val boostVisualization: Boolean = false,
 ) {
     /** What the heater is actually aiming for, including any active boost. The Venty tops out at 210 °C. */
     val effectiveTargetTenths: Int
@@ -157,6 +221,15 @@ data class VentyStatus(
         },
     )
 }
+
+/** Display and feel settings from cmd `0x06`. */
+data class DeviceSettings(
+    /** 1 to 9. */
+    val brightness: Int,
+    val vibration: Boolean,
+    /** Permanent boost: boost and superboost no longer end after about 90 s. */
+    val boostTimeoutDisabled: Boolean,
+)
 
 internal fun ByteArray.u8(i: Int): Int = this[i].toInt() and 0xFF
 internal fun ByteArray.u16(i: Int): Int = u8(i) or (u8(i + 1) shl 8)

@@ -72,6 +72,9 @@ class VentyController(context: Context) {
     private val _notices = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val notices: SharedFlow<String> = _notices.asSharedFlow()
 
+    private val _deviceSettings = MutableStateFlow<DeviceSettings?>(null)
+    val deviceSettings: StateFlow<DeviceSettings?> = _deviceSettings.asStateFlow()
+
     private val _info = MutableStateFlow(DeviceInfo())
     val info: StateFlow<DeviceInfo> = _info.asStateFlow()
 
@@ -186,6 +189,7 @@ class VentyController(context: Context) {
         deviceStatus = null
         _status.value = null
         _info.value = DeviceInfo()
+        _deviceSettings.value = null
         _connection.value = ConnectionState.Idle
     }
 
@@ -232,6 +236,7 @@ class VentyController(context: Context) {
         l.send(VentyProtocol.readFirmware())
         l.send(VentyProtocol.pollStatus())
         l.send(VentyProtocol.readUsage())
+        l.send(VentyProtocol.readDeviceSettings())
 
         var tick = 0
         var announced = false
@@ -259,6 +264,7 @@ class VentyController(context: Context) {
             publish()
             return
         }
+        VentyProtocol.parseDeviceSettings(data)?.let { _deviceSettings.value = it; return }
         VentyProtocol.parseFirmware(data)?.let { fw -> _info.update { it.copy(firmware = fw) }; return }
         VentyProtocol.parseHeaterMinutes(data)?.let { m -> _info.update { it.copy(heaterMinutes = m) }; return }
         Log.d(TAG, "unhandled packet ${data.toHex()}")
@@ -363,6 +369,43 @@ class VentyController(context: Context) {
                 delay(300)
                 sendSafely(base?.let { VentyProtocol.setHeaterModeAndTarget(HeaterMode.On, it) } ?: VentyProtocol.setHeaterMode(HeaterMode.On))
             }
+        }
+    }
+
+    // ---- Settings -------------------------------------------------------------------------
+
+    fun setFahrenheit(on: Boolean) = send(VentyProtocol.setSetting(VentyProtocol.SETTING_FAHRENHEIT, on))
+    fun setEcoCharge(on: Boolean) = send(VentyProtocol.setSetting(VentyProtocol.SETTING_ECO_CHARGE, on))
+    fun setEcoVoltage(on: Boolean) = send(VentyProtocol.setSetting(VentyProtocol.SETTING_ECO_VOLTAGE, on))
+    fun setBoostVisualization(on: Boolean) =
+        send(VentyProtocol.setSetting(VentyProtocol.SETTING_BOOST_VISUALIZATION, on))
+
+    fun setBrightness(level: Int) {
+        _deviceSettings.update { it?.copy(brightness = level.coerceIn(1, 9)) }
+        sendThenReread(VentyProtocol.setBrightness(level))
+    }
+
+    fun setVibration(on: Boolean) {
+        _deviceSettings.update { it?.copy(vibration = on) }
+        sendThenReread(VentyProtocol.setVibration(on))
+    }
+
+    fun setBoostTimeoutDisabled(disabled: Boolean) {
+        _deviceSettings.update { it?.copy(boostTimeoutDisabled = disabled) }
+        sendThenReread(VentyProtocol.setBoostTimeoutDisabled(disabled))
+    }
+
+    fun findMyDevice() = send(VentyProtocol.findMyDevice())
+
+    private fun send(packet: ByteArray) {
+        scope.launch { sendSafely(packet) }
+    }
+
+    /** cmd 0x06 writes aren't echoed by the status poll, so read the settings back. */
+    private fun sendThenReread(packet: ByteArray) {
+        scope.launch {
+            sendSafely(packet)
+            sendSafely(VentyProtocol.readDeviceSettings())
         }
     }
 

@@ -67,6 +67,20 @@ fun VentyRoot(controller: VentyController) {
 
     val connection by controller.connection.collectAsStateWithLifecycle()
 
+    // Ask for notifications once Bluetooth access is sorted, for the ready and low-battery alerts.
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+    LaunchedEffect(granted) {
+        if (granted && Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    var splash by rememberSaveable { mutableStateOf(true) }
+
     LaunchedEffect(granted, bluetoothOn) {
         if (granted && bluetoothOn && !triedAutoConnect && connection == ConnectionState.Idle) {
             triedAutoConnect = true
@@ -112,6 +126,7 @@ fun VentyRoot(controller: VentyController) {
                 )
             }
         }
+        if (splash) IgnitionSplash(onDone = { splash = false })
     }
 }
 

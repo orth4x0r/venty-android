@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.orth4x0r.venty.ui.VentyRoot
 import io.github.orth4x0r.venty.ui.theme.VentyTheme
 
@@ -15,9 +17,11 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
-        val controller = (application as VentyApp).controller
+        val app = application as VentyApp
+        val controller = app.controller
         setContent {
-            VentyTheme {
+            val prefs by app.prefs.app.collectAsStateWithLifecycle()
+            VentyTheme(dynamicColor = prefs.dynamicColor) {
                 VentyRoot(controller)
             }
         }
