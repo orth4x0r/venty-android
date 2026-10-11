@@ -22,6 +22,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,9 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import io.github.orth4x0r.venty.ui.theme.VentyColors
@@ -64,34 +67,33 @@ fun AmbientBackground(tint: Color, intensity: Float, modifier: Modifier = Modifi
         animationSpec = infiniteRepeatable(tween(3200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "breathe",
     )
-    Canvas(modifier.fillMaxSize()) {
-        drawRect(VentyColors.Background)
-        val a = drift * 2 * PI.toFloat()
-        val c1 = Offset(size.width * (0.5f + 0.18f * sin(a)), size.height * (0.28f + 0.05f * sin(a * 2)))
-        val c2 = Offset(size.width * (0.5f - 0.22f * sin(a + 1.3f)), size.height * (0.78f + 0.04f * sin(a + 0.7f)))
-        drawRect(
-            Brush.radialGradient(
-                listOf(color.copy(alpha = 0.22f * strength * breathe), Color.Transparent),
-                center = c1,
-                radius = size.width * 0.95f,
-            ),
-        )
-        drawRect(
-            Brush.radialGradient(
-                listOf(color.copy(alpha = 0.10f * strength), Color.Transparent),
-                center = c2,
-                radius = size.width * 0.8f,
-            ),
-        )
-        // A soft vignette keeps the edges dark and the content in focus.
-        drawRect(
-            Brush.radialGradient(
+    // Gradients are built once per size and colour, at the origin, then moved into place each
+    // frame, so the drift and breathing never allocate.
+    Spacer(
+        modifier.fillMaxSize().drawWithCache {
+            val r1 = size.width * 0.95f
+            val r2 = size.width * 0.8f
+            val blob1 = Brush.radialGradient(listOf(color.copy(alpha = 0.22f), Color.Transparent), center = Offset.Zero, radius = r1)
+            val blob2 = Brush.radialGradient(listOf(color.copy(alpha = 0.10f), Color.Transparent), center = Offset.Zero, radius = r2)
+            // A soft vignette keeps the edges dark and the content in focus.
+            val vignette = Brush.radialGradient(
                 listOf(Color.Transparent, Color.Black.copy(alpha = 0.45f)),
                 center = Offset(size.width / 2, size.height * 0.4f),
                 radius = size.maxDimension * 0.75f,
-            ),
-        )
-    }
+            )
+            onDrawBehind {
+                drawRect(VentyColors.Background)
+                val a = drift * 2 * PI.toFloat()
+                translate(size.width * (0.5f + 0.18f * sin(a)), size.height * (0.28f + 0.05f * sin(a * 2))) {
+                    drawCircle(blob1, radius = r1, center = Offset.Zero, alpha = strength * breathe)
+                }
+                translate(size.width * (0.5f - 0.22f * sin(a + 1.3f)), size.height * (0.78f + 0.04f * sin(a + 0.7f))) {
+                    drawCircle(blob2, radius = r2, center = Offset.Zero, alpha = strength)
+                }
+                drawRect(vignette)
+            }
+        },
+    )
 }
 
 /** Shrinks slightly while pressed and springs back, so taps feel physical. */

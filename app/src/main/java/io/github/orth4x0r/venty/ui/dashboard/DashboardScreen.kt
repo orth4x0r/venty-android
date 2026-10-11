@@ -2,11 +2,12 @@ package io.github.orth4x0r.venty.ui.dashboard
 
 import android.view.HapticFeedbackConstants
 import android.view.View
-import androidx.activity.compose.BackHandler
+import android.os.Build
+import androidx.activity.BackEventCompat
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -21,6 +22,27 @@ import io.github.orth4x0r.venty.ui.session.LiveSessionStrip
 import io.github.orth4x0r.venty.ui.session.PuffingIndicator
 import io.github.orth4x0r.venty.ui.settings.SettingsScreen
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.unit.IntOffset
+import io.github.orth4x0r.venty.session.SessionRecord
+import io.github.orth4x0r.venty.ui.session.SessionDoneCard
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlin.math.abs
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -153,9 +175,36 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     }
 
     var page by rememberSaveable { mutableStateOf(Page.Main) }
-    BackHandler(enabled = page != Page.Main) { page = Page.Main }
-
     val scope = rememberCoroutineScope()
+
+    // Predictive back: the open page shrinks and drifts with the gesture, then either commits
+    // (the page transition takes over from wherever the finger left it) or springs back.
+    var backProgress by remember { mutableFloatStateOf(0f) }
+    var backFromLeft by remember { mutableStateOf(true) }
+    var backSettle by remember { mutableStateOf<Job?>(null) }
+    fun openPage(p: Page) {
+        backSettle?.cancel()
+        backProgress = 0f
+        page = p
+    }
+    PredictiveBackHandler(enabled = page != Page.Main) { events ->
+        backSettle?.cancel()
+        try {
+            events.collect { e ->
+                backFromLeft = e.swipeEdge == BackEventCompat.EDGE_LEFT
+                backProgress = e.progress
+            }
+            page = Page.Main
+        } catch (cancelled: CancellationException) {
+            backSettle = scope.launch {
+                animate(backProgress, 0f, animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium)) { v, _ ->
+                    backProgress = v
+                }
+            }
+            throw cancelled
+        }
+    }
+
     var notice by remember { mutableStateOf<String?>(null) }
     var undo by remember { mutableStateOf<(() -> Unit)?>(null) }
     fun showNotice(msg: String, forMs: Long = 3500) {
@@ -170,19 +219,14 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
         controller.notices.collect { showNotice(it) }
     }
 
-    // When a session wraps up, show a short summary and a nudge to let the Venty cool down.
+    // When a session wraps up, a summary card slides in with a cool-down ring. Held here, not
+    // on the main page, so it survives a trip to Settings and back.
     val latestSession = history.firstOrNull()
     var seenSession by remember { mutableStateOf(latestSession?.startMs) }
+    var doneSession by remember { mutableStateOf<SessionRecord?>(null) }
     LaunchedEffect(latestSession?.startMs) {
         val r = latestSession
-        if (r != null && r.startMs != seenSession) {
-            val minutes = ((r.endMs - r.startMs) / 60_000).coerceAtLeast(1)
-            showNotice(
-                "Session done: ${r.puffs} puff${if (r.puffs == 1) "" else "s"} in $minutes min. " +
-                    "Let it cool for a few minutes before packing it away.",
-                forMs = 8000,
-            )
-        }
+        if (r != null && r.startMs != seenSession) doneSession = r
         seenSession = r?.startMs
     }
 
@@ -209,99 +253,127 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
         AnimatedContent(
             targetState = page,
             transitionSpec = {
-                val forward = targetState != Page.Main
-                (fadeIn(tween(250)) + slideInHorizontally { if (forward) it / 4 else -it / 4 }) togetherWith
-                    (fadeOut(tween(200)) + slideOutHorizontally { if (forward) -it / 4 else it / 4 })
+                // Shared axis: both pages travel the same way on a spring, the incoming one
+                // growing from 96 % as it fades up and the outgoing one receding.
+                val dir = if (targetState != Page.Main) 1 else -1
+                val slide = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold)
+                val grow = spring<Float>(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow)
+                (slideInHorizontally(slide) { dir * it / 5 } + scaleIn(grow, initialScale = 0.96f) + fadeIn(tween(260, delayMillis = 50))) togetherWith
+                    (slideOutHorizontally(slide) { -dir * it / 6 } + scaleOut(grow, targetScale = 0.96f) + fadeOut(tween(160)))
             },
             label = "page",
         ) { target ->
-            when (target) {
-                Page.Settings -> SettingsScreen(
-                    status = status,
-                    deviceSettings = deviceSettings,
-                    firmware = info.firmware,
-                    deviceName = name,
-                    appPrefs = prefs,
-                    onFahrenheit = controller::setFahrenheit,
-                    onEcoCharge = controller::setEcoCharge,
-                    onEcoVoltage = controller::setEcoVoltage,
-                    onBoostVisualization = controller::setBoostVisualization,
-                    onBrightness = controller::setBrightness,
-                    onVibration = controller::setVibration,
-                    onBoostTimeoutDisabled = controller::setBoostTimeoutDisabled,
-                    onFindMy = controller::findMyDevice,
-                    onAppPrefs = app.prefs::setApp,
-                    onBack = { page = Page.Main },
-                )
-                Page.History -> HistoryScreen(
-                    history = history,
-                    lifetimePuffs = lifetimePuffs,
-                    fahrenheit = status?.fahrenheit == true,
-                    onClear = app.sessions::clearHistory,
-                    onBack = { page = Page.Main },
-                )
-                Page.Main -> Column(
-                    Modifier
-                        .fillMaxSize()
-                        .safeDrawingPadding()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 20.dp),
-                ) {
-                    TopBar(
-                        name = name,
+            // Follows the back gesture on the sub-pages; the main page never moves with it.
+            val scrub = if (target == Page.Main) Modifier else Modifier.graphicsLayer {
+                val p = backProgress
+                val sc = 1f - 0.1f * p
+                scaleX = sc
+                scaleY = sc
+                translationX = (if (backFromLeft) 1f else -1f) * 28.dp.toPx() * p
+                alpha = 1f - 0.3f * p
+            }
+            Box(Modifier.fillMaxSize().then(scrub)) {
+                when (target) {
+                    Page.Settings -> SettingsScreen(
                         status = status,
-                        demo = (connection as? ConnectionState.Connected)?.demo == true,
-                        onHistory = { page = Page.History },
-                        onSettings = { page = Page.Settings },
-                        onDisconnect = controller::disconnect,
-                        onForget = controller::forgetDevice,
+                        deviceSettings = deviceSettings,
+                        firmware = info.firmware,
+                        deviceName = name,
+                        appPrefs = prefs,
+                        onFahrenheit = controller::setFahrenheit,
+                        onEcoCharge = controller::setEcoCharge,
+                        onEcoVoltage = controller::setEcoVoltage,
+                        onBoostVisualization = controller::setBoostVisualization,
+                        onBrightness = controller::setBrightness,
+                        onVibration = controller::setVibration,
+                        onBoostTimeoutDisabled = controller::setBoostTimeoutDisabled,
+                        onFindMy = controller::findMyDevice,
+                        onAppPrefs = app.prefs::setApp,
+                        onBack = { page = Page.Main },
                     )
-                    AnimatedVisibility(visible = notice != null, enter = expandVertically(), exit = shrinkVertically()) {
-                        Banner(notice ?: "", icon = Icons.Rounded.Info, action = undo?.let { u ->
-                            "Undo" to {
-                                u()
-                                undo = null
-                                notice = null
-                            }
-                        })
-                    }
-                    AnimatedVisibility(
-                        visible = connection is ConnectionState.Reconnecting,
-                        enter = expandVertically(),
-                        exit = shrinkVertically(),
+                    Page.History -> HistoryScreen(
+                        history = history,
+                        lifetimePuffs = lifetimePuffs,
+                        fahrenheit = status?.fahrenheit == true,
+                        onClear = app.sessions::clearHistory,
+                        onBack = { page = Page.Main },
+                    )
+                    Page.Main -> Column(
+                        Modifier
+                            .fillMaxSize()
+                            .safeDrawingPadding()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp),
                     ) {
-                        val r = connection as? ConnectionState.Reconnecting
-                        Banner("Connection lost, reconnecting…" + (r?.reason?.let { "\n$it" } ?: ""))
-                    }
-
-                    val s = status
-                    if (s == null) {
-                        ConnectingPlaceholder(name, onCancel = controller::disconnect)
-                    } else {
-                        Dashboard(
-                            s = s,
-                            info = info,
-                            live = live,
-                            presets = presets,
-                            batterySamples = batterySamples,
-                            lifetimePuffs = lifetimePuffs,
-                            onTarget = controller::setTarget,
-                            onMode = controller::setHeaterMode,
-                            onBoost = controller::setBoostOffset,
-                            onSuperBoost = controller::setSuperBoostOffset,
-                            onAddPreset = app.prefs::addPreset,
-                            onRemovePreset = { p ->
-                                app.prefs.removePreset(p)
-                                undo = { app.prefs.addPreset(p) }
-                                showNotice("Removed preset ${p.name}", forMs = 5000)
-                            },
+                        TopBar(
+                            name = name,
+                            status = status,
+                            demo = (connection as? ConnectionState.Connected)?.demo == true,
+                            onHistory = { openPage(Page.History) },
+                            onSettings = { openPage(Page.Settings) },
+                            onDisconnect = controller::disconnect,
+                            onForget = controller::forgetDevice,
                         )
+                        SessionDoneCard(
+                            record = doneSession,
+                            fahrenheit = status?.fahrenheit == true,
+                            onDismiss = { doneSession = null },
+                        )
+                        AnimatedVisibility(visible = notice != null, enter = expandVertically(), exit = shrinkVertically()) {
+                            Banner(notice ?: "", icon = Icons.Rounded.Info, action = undo?.let { u ->
+                                "Undo" to {
+                                    u()
+                                    undo = null
+                                    notice = null
+                                }
+                            })
+                        }
+                        AnimatedVisibility(
+                            visible = connection is ConnectionState.Reconnecting,
+                            enter = expandVertically(),
+                            exit = shrinkVertically(),
+                        ) {
+                            val r = connection as? ConnectionState.Reconnecting
+                            Banner("Connection lost, reconnecting…" + (r?.reason?.let { "\n$it" } ?: ""))
+                        }
+
+                        val s = status
+                        if (s == null) {
+                            ConnectingPlaceholder(name, onCancel = controller::disconnect)
+                        } else {
+                            Dashboard(
+                                s = s,
+                                info = info,
+                                live = live,
+                                presets = presets,
+                                batterySamples = batterySamples,
+                                lifetimePuffs = lifetimePuffs,
+                                onTarget = controller::setTarget,
+                                onMode = controller::setHeaterMode,
+                                onBoost = controller::setBoostOffset,
+                                onSuperBoost = controller::setSuperBoostOffset,
+                                onAddPreset = app.prefs::addPreset,
+                                onRemovePreset = { p ->
+                                    val at = presets.indexOf(p)
+                                    app.prefs.removePreset(p)
+                                    undo = { app.prefs.insertPreset(at, p) }
+                                    showNotice("Removed preset ${p.name}", forMs = 5000)
+                                },
+                            )
+                        }
+                        Spacer(Modifier.height(24.dp))
                     }
-                    Spacer(Modifier.height(24.dp))
                 }
             }
         }
     }
+}
+
+/** A distinct click for landing on a preset while dragging the dial. */
+private fun View.snapConfirm() {
+    performHapticFeedback(
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.LONG_PRESS,
+    )
 }
 
 /** Light tick for every degree, a heavier one on each multiple of ten. */
@@ -340,23 +412,42 @@ private fun Dashboard(
     }
 
     // Dragging the dial's ring: show the finger's value, tick on each degree, write on release.
+    // Within 2° of a saved preset the value is pulled onto it, with its own click and its name.
     var dragTenths by remember { mutableStateOf<Int?>(null) }
+    var snapped by remember { mutableStateOf<Preset?>(null) }
     val dragDisplay = dragTenths?.let { Temperature.toDisplay(it, f) }
     val onDialDrag: (Int?) -> Unit = { t ->
         // Read the state itself, not the composed value, which can be a frame behind the finger.
         val prev = dragTenths?.let { Temperature.toDisplay(it, f) }
+        // The dial shows the boosted temperature; the device stores the base under it.
+        val boostDelta = s.effectiveTargetTenths - s.targetTenths
         if (t == null) {
-            // The dial shows the boosted temperature; the device stores the base under it.
-            val boostDelta = s.effectiveTargetTenths - s.targetTenths
-            prev?.let { onTarget(Temperature.fromDisplay(it, f) - boostDelta) }
+            val p = snapped
+            if (p != null) onTarget(p.tenthsC) else prev?.let { onTarget(Temperature.fromDisplay(it, f) - boostDelta) }
             dragTenths = null
+            snapped = null
         } else {
             val d = Temperature.toDisplay(t, f)
-            val atEnd = t <= VentyProtocol.MIN_TARGET || t >= VentyProtocol.MAX_TARGET
-            if (d != prev) view.detent(heavy = d % 10 == 0 || atEnd)
-            dragTenths = t
+            val magnet = presets
+                .map { it to abs(Temperature.toDisplay(it.tenthsC + boostDelta, f) - d) }
+                .filter { it.second <= 2 }
+                .minByOrNull { it.second }
+                ?.first
+            if (magnet != null) {
+                if (magnet != snapped) view.snapConfirm()
+                snapped = magnet
+                dragTenths = magnet.tenthsC + boostDelta
+            } else {
+                val atEnd = t <= VentyProtocol.MIN_TARGET || t >= VentyProtocol.MAX_TARGET
+                if (d != prev) view.detent(heavy = d % 10 == 0 || atEnd)
+                snapped = null
+                dragTenths = t
+            }
         }
     }
+    // Keeps the last preset name while its label animates away.
+    val snapName = remember { arrayOf("") }
+    snapped?.let { snapName[0] = it.name }
 
     Spacer(Modifier.height(8.dp))
     // The Venty may never report a live temperature (bytes 2-3 stay 0x8000), so when it doesn't,
@@ -391,6 +482,18 @@ private fun Dashboard(
             color = if (dragDisplay == null && current == null && !heating) VentyColors.Muted else MaterialTheme.colorScheme.onBackground,
             glow = phase.color.takeIf { heating || dragDisplay != null },
         )
+        AnimatedVisibility(
+            visible = snapped != null,
+            enter = fadeIn(tween(150)) + scaleIn(spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), initialScale = 0.7f) + expandVertically(),
+            exit = fadeOut(tween(150)) + shrinkVertically(),
+        ) {
+            Text(
+                snapName[0],
+                style = MaterialTheme.typography.titleMedium,
+                color = VentyColors.Ember,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
         StatusPill(phase, s)
         PuffingIndicator(active = live?.puffing == true)
         if (s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
@@ -405,9 +508,9 @@ private fun Dashboard(
 
     LiveSessionStrip(live, Modifier.padding(bottom = 12.dp))
     Box(Modifier.enterFromBelow(80)) { TargetCard(s, onTarget) }
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(2.dp))
     Box(Modifier.enterFromBelow(120)) { PresetsRow(presets, s, onTarget, onAddPreset, onRemovePreset) }
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(6.dp))
     Box(Modifier.enterFromBelow(160)) {
         HeaterButton(on = s.heaterMode.isHeating, onToggle = { onMode(if (s.heaterMode.isHeating) HeaterMode.Off else HeaterMode.On) })
     }
@@ -452,7 +555,11 @@ private enum class HeaterPhase(val label: String) {
     }
 }
 
-/** Saved temperatures. Tap to apply, long-press to delete, "+" saves the current target. */
+/**
+ * Saved temperatures. Tap to apply, long-press to delete, "+" saves the current target. Chips
+ * fade in and out as they come and go while their neighbours glide over, and the selected one
+ * sits on a softly breathing glow.
+ */
 @Composable
 private fun PresetsRow(
     presets: List<Preset>,
@@ -463,19 +570,64 @@ private fun PresetsRow(
 ) {
     val view = LocalView.current
     val f = s.fahrenheit
-    Row(
+    val breathe by rememberInfiniteTransition(label = "presetGlow").animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
+        label = "presetBreathe",
+    )
+    // Lazy keys must be unique, so a (rare) duplicate preset gets a counter on its key.
+    val keyed = remember(presets) {
+        val seen = HashMap<Preset, Int>()
+        presets.map { p ->
+            val n = seen.getOrElse(p) { 0 }
+            seen[p] = n + 1
+            "${p.name}|${p.tenthsC}|$n" to p
+        }
+    }
+    // Chips that weren't there when the row first showed pop in rather than just fading.
+    val initial = remember { presets.toSet() }
+    val exists = presets.any { it.tenthsC == s.targetTenths }
+    LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        // Room above and below for the selected chip's glow, which the list would clip.
+        contentPadding = PaddingValues(vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        presets.forEach { p ->
+        items(keyed, key = { it.first }) { (_, p) ->
             val selected = p.tenthsC == s.targetTenths
             val bg by animateColorAsState(if (selected) VentyColors.Heat.copy(alpha = 0.22f) else VentyColors.Surface, label = "presetBg")
             val border by animateColorAsState(if (selected) VentyColors.Heat else Color.White.copy(alpha = 0.08f), label = "presetBorder")
+            val glow by animateFloatAsState(if (selected) 1f else 0f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessLow), label = "presetGlow")
+            val pop = remember { Animatable(if (p in initial) 1f else 0.6f) }
+            LaunchedEffect(Unit) { pop.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow)) }
             val interaction = remember { MutableInteractionSource() }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
+                    .animateItem(
+                        fadeInSpec = tween(220),
+                        placementSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold),
+                        fadeOutSpec = tween(180),
+                    )
+                    .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
                     .pressScale(interaction, 0.93f)
+                    .drawBehind {
+                        val g = glow
+                        if (g > 0.01f) {
+                            val spread = 10.dp.toPx()
+                            drawRoundRect(
+                                Brush.radialGradient(
+                                    listOf(VentyColors.Heat.copy(alpha = 0.5f * g * breathe), Color.Transparent),
+                                    center = center,
+                                    radius = size.maxDimension * 0.75f,
+                                ),
+                                topLeft = Offset(-spread, -spread),
+                                size = Size(size.width + spread * 2, size.height + spread * 2),
+                                cornerRadius = CornerRadius(18.dp.toPx() + spread),
+                            )
+                        }
+                    }
                     .clip(RoundedCornerShape(18.dp))
                     .background(bg)
                     .border(1.dp, border, RoundedCornerShape(18.dp))
@@ -503,21 +655,27 @@ private fun PresetsRow(
                 Text("${Temperature.toDisplay(p.tenthsC, f)}°", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
             }
         }
-        val exists = presets.any { it.tenthsC == s.targetTenths }
         if (!exists && presets.size < 8) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .border(1.dp, VentyColors.Heat.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
-                    .clickable {
-                        view.detent(heavy = true)
-                        onAdd(Preset("Custom ${presets.size + 1}", s.targetTenths))
-                    }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-            ) {
-                Icon(Icons.Rounded.Add, contentDescription = null, tint = VentyColors.Heat, modifier = Modifier.size(18.dp))
-                Text("Save ${Temperature.toDisplay(s.targetTenths, f)}°", style = MaterialTheme.typography.bodySmall, color = VentyColors.Heat)
+            item(key = "add") {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .animateItem(
+                            fadeInSpec = tween(220),
+                            placementSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold),
+                            fadeOutSpec = tween(180),
+                        )
+                        .clip(RoundedCornerShape(18.dp))
+                        .border(1.dp, VentyColors.Heat.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
+                        .clickable {
+                            view.detent(heavy = true)
+                            onAdd(Preset("Custom ${presets.size + 1}", s.targetTenths))
+                        }
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                ) {
+                    Icon(Icons.Rounded.Add, contentDescription = null, tint = VentyColors.Heat, modifier = Modifier.size(18.dp))
+                    Text("Save ${Temperature.toDisplay(s.targetTenths, f)}°", style = MaterialTheme.typography.bodySmall, color = VentyColors.Heat)
+                }
             }
         }
     }

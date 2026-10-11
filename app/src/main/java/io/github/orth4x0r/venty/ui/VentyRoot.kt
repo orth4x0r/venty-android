@@ -8,8 +8,12 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -106,7 +110,15 @@ fun VentyRoot(controller: VentyController) {
     Box(Modifier.fillMaxSize().background(VentyColors.Background)) {
         AnimatedContent(
             targetState = screen,
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
+            transitionSpec = {
+                if (targetState == Screen.Dashboard) {
+                    // "Ignite": the dashboard swells up out of the glow as if the dial just lit.
+                    (fadeIn(tween(420)) + scaleIn(spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessLow), initialScale = 0.9f)) togetherWith
+                        fadeOut(tween(220))
+                } else {
+                    fadeIn() togetherWith fadeOut()
+                }
+            },
             label = "screen",
         ) { target ->
             when (target) {
