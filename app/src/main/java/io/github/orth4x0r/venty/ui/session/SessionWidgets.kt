@@ -76,6 +76,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -235,6 +236,8 @@ fun PuffingIndicator(active: Boolean) {
     }
 }
 
+/** How long the session-done card's cool-down ring runs after a session ends. */
+const val SESSION_COOL_DOWN_MS = 3 * 60_000L
 private const val COOL_DOWN_MS = 3 * 60_000
 
 /**
@@ -244,13 +247,29 @@ private const val COOL_DOWN_MS = 3 * 60_000
  * ring runs out.
  */
 @Composable
-fun SessionDoneCard(record: SessionRecord?, fahrenheit: Boolean, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+fun SessionDoneCard(
+    record: SessionRecord?,
+    fahrenheit: Boolean,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** False once this record's entrance has played, so coming back to it doesn't replay it. */
+    animateIn: Boolean = true,
+    onPlayed: () -> Unit = {},
+) {
     // Keep the last record so the card can animate out with its content still in it.
     val holder = remember { arrayOfNulls<SessionRecord>(1) }
     if (record != null) holder[0] = record
     val shown = record ?: holder[0]
+    // A card that turns up while we're watching waits a beat, so it doesn't land in the same
+    // frame as the live-session chips folding away. One already there on first show just is.
+    val wanted = record != null
+    var visible by remember { mutableStateOf(wanted) }
+    LaunchedEffect(wanted) {
+        if (wanted && !visible) delay(250)
+        visible = wanted
+    }
     AnimatedVisibility(
-        visible = record != null,
+        visible = visible && wanted,
         modifier = modifier,
         enter = fadeIn(tween(260)) +
             expandVertically(spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntSize.VisibilityThreshold)) +
@@ -258,14 +277,17 @@ fun SessionDoneCard(record: SessionRecord?, fahrenheit: Boolean, onDismiss: () -
         exit = fadeOut(tween(200)) + scaleOut(tween(220), targetScale = 0.94f) + shrinkVertically(tween(280, delayMillis = 60)),
     ) {
         // Keyed so a second session straight after the first starts its own card afresh.
-        if (shown != null) key(shown.startMs) { DoneCard(shown, fahrenheit, onDismiss) }
+        if (shown != null) key(shown.startMs) { DoneCard(shown, fahrenheit, onDismiss, animateIn, onPlayed) }
     }
 }
 
 @Composable
-private fun DoneCard(r: SessionRecord, fahrenheit: Boolean, onDismiss: () -> Unit) {
+private fun DoneCard(r: SessionRecord, fahrenheit: Boolean, onDismiss: () -> Unit, animateIn: Boolean, onPlayed: () -> Unit) {
     val dismiss by rememberUpdatedState(onDismiss)
     val density = LocalDensity.current
+    // Only the value at first show counts: the flag flips as soon as the entrance starts.
+    val intro = remember { animateIn }
+    val played by rememberUpdatedState(onPlayed)
 
     // The cool-down counts from when the session ended, so leaving the page and coming back
     // picks the ring up where it was.
@@ -280,9 +302,11 @@ private fun DoneCard(r: SessionRecord, fahrenheit: Boolean, onDismiss: () -> Uni
     // Only recomposes once a second for the countdown text; the ring itself redraws per frame.
     val secondsLeft by remember { derivedStateOf { ceil(cool.value * COOL_DOWN_MS / 1000f).toInt() } }
 
-    // Roll the puff count up from zero, quicker for big sessions.
-    var puffs by remember { mutableIntStateOf(0) }
+    // Roll the puff count up from zero, quicker for big sessions. Shown settled on a return.
+    var puffs by remember { mutableIntStateOf(if (intro) 0 else r.puffs) }
     LaunchedEffect(Unit) {
+        if (!intro) return@LaunchedEffect
+        played()
         delay(280)
         val step = (900L / r.puffs.coerceAtLeast(1)).coerceIn(25L, 120L)
         for (i in 1..r.puffs) {
@@ -291,9 +315,10 @@ private fun DoneCard(r: SessionRecord, fahrenheit: Boolean, onDismiss: () -> Uni
         }
     }
 
-    // A single highlight sweeps across the card as it lands.
-    val sheen = remember { Animatable(0f) }
+    // A single highlight sweeps across the card as it lands, the first time only.
+    val sheen = remember { Animatable(if (intro) 0f else 1f) }
     LaunchedEffect(Unit) {
+        if (!intro) return@LaunchedEffect
         delay(200)
         sheen.animateTo(1f, tween(1100, easing = FastOutSlowInEasing))
     }

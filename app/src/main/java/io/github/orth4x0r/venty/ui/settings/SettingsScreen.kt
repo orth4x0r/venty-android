@@ -266,7 +266,8 @@ private fun SettingsCard(modifier: Modifier = Modifier, content: @Composable Col
         modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh.copy(alpha = 0.7f), VentyColors.Surface.copy(alpha = 0.7f))))
+            // Mostly opaque: lighter cards went muddy while the page crossfades with the dashboard.
+            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh.copy(alpha = 0.86f), VentyColors.Surface.copy(alpha = 0.86f))))
             .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)), shape),
         content = content,
     )

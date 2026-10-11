@@ -1,8 +1,16 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.view.HapticFeedbackConstants
+import android.view.View
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -36,10 +44,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.dp
 import io.github.orth4x0r.venty.ble.VentyProtocol
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
@@ -139,6 +151,33 @@ fun TemperatureDial(
         wasReady[0] = ready
     }
 
+    // Boost whoosh: dropping into boost or superboost punches the dial outwards on a bouncy
+    // spring and fires a burst of speed lines; superboost adds two pink shock rings. Seeded
+    // with the first value so opening the app mid-boost stays calm.
+    val punch = remember { Animatable(1f) }
+    val whoosh = remember { Animatable(1f) }
+    val lastEnergy = remember { intArrayOf(energy) }
+    val whooshSuper = remember { booleanArrayOf(false) }
+    // Not tied to the effect, so a quick second mode change can't freeze the lines mid-flight.
+    val fxScope = rememberCoroutineScope()
+    val view = LocalView.current
+    LaunchedEffect(energy) {
+        val prev = lastEnergy[0]
+        lastEnergy[0] = energy
+        if (energy >= 2 && energy != prev) {
+            whooshSuper[0] = energy >= 3
+            fxScope.launch {
+                whoosh.snapTo(0f)
+                whoosh.animateTo(1f, tween(if (energy >= 3) 950 else 700, easing = LinearOutSlowInEasing))
+            }
+            fxScope.launch {
+                punch.animateTo(1.07f, tween(110, easing = FastOutSlowInEasing))
+                punch.animateTo(1f, spring(dampingRatio = 0.32f, stiffness = Spring.StiffnessMediumLow))
+            }
+            view.boostRumble()
+        }
+    }
+
     val dragModifier = if (onDrag == null) Modifier else Modifier.pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
@@ -179,7 +218,17 @@ fun TemperatureDial(
         }
     }
 
-    Box(modifier.fillMaxWidth().aspectRatio(1f).then(dragModifier), contentAlignment = Alignment.Center) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .graphicsLayer {
+                scaleX = punch.value
+                scaleY = punch.value
+            }
+            .then(dragModifier),
+        contentAlignment = Alignment.Center,
+    ) {
         // Three cached layers, bottom to top. Each builds its brushes only when its own inputs
         // change (size, colour, the arc's length) and the per-frame values, the pulse, corona
         // spin, shimmer and marker swell, are applied as draw alpha, rotation or scale.
@@ -330,10 +379,92 @@ fun TemperatureDial(
             modifier = Modifier.fillMaxSize(),
         )
         io.github.orth4x0r.venty.ui.ReadyBurst(trigger = ready, color = color, modifier = Modifier.fillMaxSize())
+        // Speed lines and superboost rings, drawn only while the whoosh plays.
+        Spacer(
+            Modifier
+                .fillMaxSize()
+                .drawWithCache {
+                    val g = DialGeometry(size)
+                    // Fixed jitter per line, so the burst looks hand-thrown but never flickers.
+                    val rnd = java.util.Random(11)
+                    val jitter = FloatArray(SPEED_LINES * 2) { rnd.nextFloat() }
+                    val lineW = 2.5.dp.toPx()
+                    onDrawBehind {
+                        val p = whoosh.value
+                        if (p >= 1f) return@onDrawBehind
+                        val fade = 1f - p
+                        val hot = androidx.compose.ui.graphics.lerp(color, Color.White, 0.45f)
+                        for (i in 0 until SPEED_LINES) {
+                            val angle = Math.toRadians((360.0 / SPEED_LINES) * i + jitter[i * 2] * 9.0)
+                            val speed = 0.8f + 0.4f * jitter[i * 2 + 1]
+                            val inner = g.radius * (1.02f + 0.55f * p * speed)
+                            val outer = inner + g.radius * (0.10f + 0.22f * fade) * speed
+                            val cx = cos(angle).toFloat()
+                            val sy = sin(angle).toFloat()
+                            drawLine(
+                                hot.copy(alpha = 0.85f * fade),
+                                Offset(g.center.x + cx * inner, g.center.y + sy * inner),
+                                Offset(g.center.x + cx * outer, g.center.y + sy * outer),
+                                strokeWidth = lineW * (0.5f + fade),
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                        if (whooshSuper[0]) {
+                            for (k in 0..1) {
+                                // Second ring trails the first by a quarter of the way.
+                                val q = ((p * 1.3f) - k * 0.3f).coerceIn(0f, 1f)
+                                if (q <= 0f || q >= 1f) continue
+                                drawCircle(
+                                    io.github.orth4x0r.venty.ui.theme.VentyColors.SuperBoost.copy(alpha = 0.7f * (1f - q)),
+                                    radius = g.radius * (0.95f + 0.75f * q),
+                                    center = g.center,
+                                    style = Stroke(g.stroke * 0.6f * (1f - q) + 1.dp.toPx()),
+                                )
+                            }
+                        }
+                    }
+                },
+        )
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
             content()
         }
     }
+}
+
+private const val SPEED_LINES = 24
+
+/**
+ * A rising buzz that lands on a thud for boost, where the vibrator can play primitives
+ * (Android 11+). Otherwise, or if anything goes wrong, a plain long-press haptic.
+ */
+private fun View.boostRumble() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && composeRumble()) return
+    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+}
+
+@RequiresApi(Build.VERSION_CODES.R)
+private fun View.composeRumble(): Boolean = try {
+    val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION")
+        context.getSystemService(Vibrator::class.java)
+    }
+    val rise = VibrationEffect.Composition.PRIMITIVE_QUICK_RISE
+    val thud = VibrationEffect.Composition.PRIMITIVE_THUD
+    if (vibrator == null || !vibrator.hasVibrator() || !vibrator.areAllPrimitivesSupported(rise, thud)) {
+        false
+    } else {
+        vibrator.vibrate(
+            VibrationEffect.startComposition()
+                .addPrimitive(rise, 0.7f)
+                .addPrimitive(thud, 1f, 30)
+                .compose(),
+        )
+        true
+    }
+} catch (e: Exception) {
+    false
 }
 
 /** Maps a point on the dial to a target in tenths of °C, clamping the gap at the bottom. */

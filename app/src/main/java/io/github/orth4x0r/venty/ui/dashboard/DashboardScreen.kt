@@ -38,7 +38,29 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.unit.IntOffset
-import io.github.orth4x0r.venty.session.SessionRecord
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.using
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import io.github.orth4x0r.venty.ui.ShockwaveRing
+import io.github.orth4x0r.venty.ui.rememberShockwave
+import io.github.orth4x0r.venty.ui.shockwaveDistortion
+import io.github.orth4x0r.venty.ui.session.SESSION_COOL_DOWN_MS
+import kotlin.math.PI
+import kotlin.math.sin
 import io.github.orth4x0r.venty.ui.session.SessionDoneCard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -187,6 +209,11 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
         backProgress = 0f
         page = p
     }
+    // A button back always leaves the usual way, whatever edge the last swipe came from.
+    fun closePage() {
+        backFromLeft = true
+        page = Page.Main
+    }
     PredictiveBackHandler(enabled = page != Page.Main) { events ->
         backSettle?.cancel()
         try {
@@ -219,153 +246,274 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
         controller.notices.collect { showNotice(it) }
     }
 
-    // When a session wraps up, a summary card slides in with a cool-down ring. Held here, not
-    // on the main page, so it survives a trip to Settings and back.
+    // When a session wraps up, a summary card slides in with a cool-down ring. It's worked out
+    // from the history rather than remembered, so it survives rotation, a dropped connection
+    // and trips to Settings, and goes the moment the heater starts again. Only which card was
+    // dismissed, and which has already played its entrance, are kept.
     val latestSession = history.firstOrNull()
-    var seenSession by remember { mutableStateOf(latestSession?.startMs) }
-    var doneSession by remember { mutableStateOf<SessionRecord?>(null) }
-    LaunchedEffect(latestSession?.startMs) {
-        val r = latestSession
-        if (r != null && r.startMs != seenSession) doneSession = r
-        seenSession = r?.startMs
+    var dismissedSession by rememberSaveable { mutableLongStateOf(0L) }
+    var playedSession by rememberSaveable { mutableLongStateOf(0L) }
+    val doneSession = latestSession?.takeIf {
+        live == null && !heaterOn && it.startMs != dismissedSession &&
+            System.currentTimeMillis() - it.endMs < SESSION_COOL_DOWN_MS
     }
+    // The dashboard sections lift in on first show only, not on every return to this page.
+    var introDone by rememberSaveable { mutableStateOf(false) }
+
+    // Heat shockwave from the heater button, in this box's coordinates.
+    val shockwave = rememberShockwave()
+    var rootOffset by remember { mutableStateOf(Offset.Zero) }
 
     val ambientPhase = status?.let { HeaterPhase.of(it) }
-    Box(Modifier.fillMaxSize()) {
-        AmbientBackground(
-            tint = ambientPhase?.color ?: VentyColors.Heat,
-            intensity = when (ambientPhase) {
-                null -> 0.4f
-                HeaterPhase.Off -> 0.45f
-                else -> 1f
-            },
-        )
-        LavaLayer(
-            level = when (status?.heaterMode) {
-                HeaterMode.Boost -> 1f
-                HeaterMode.SuperBoost -> 1.5f
-                else -> 0f
-            },
-            color = ambientPhase?.color ?: VentyColors.Boost,
-        )
-        ColorFlash(key = ambientPhase, color = ambientPhase?.color ?: VentyColors.Heat)
+    val phaseColor by animateColorAsState(ambientPhase?.color ?: VentyColors.Heat, tween(800), label = "phaseTint")
+    Box(Modifier.fillMaxSize().onGloballyPositioned { rootOffset = it.positionInRoot() }) {
+        // Everything but the ring itself, so the shockwave can bend it as it passes.
+        Box(Modifier.fillMaxSize().shockwaveDistortion(shockwave)) {
+            AmbientBackground(
+                tint = ambientPhase?.color ?: VentyColors.Heat,
+                intensity = when (ambientPhase) {
+                    null -> 0.4f
+                    HeaterPhase.Off -> 0.45f
+                    else -> 1f
+                },
+            )
+            LavaLayer(
+                level = when (status?.heaterMode) {
+                    HeaterMode.Boost -> 1f
+                    HeaterMode.SuperBoost -> 1.5f
+                    else -> 0f
+                },
+                color = ambientPhase?.color ?: VentyColors.Boost,
+            )
+            ColorFlash(key = ambientPhase, color = ambientPhase?.color ?: VentyColors.Heat)
 
-        AnimatedContent(
-            targetState = page,
-            transitionSpec = {
-                // Shared axis: both pages travel the same way on a spring, the incoming one
-                // growing from 96 % as it fades up and the outgoing one receding.
-                val dir = if (targetState != Page.Main) 1 else -1
-                val slide = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold)
-                val grow = spring<Float>(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow)
-                (slideInHorizontally(slide) { dir * it / 5 } + scaleIn(grow, initialScale = 0.96f) + fadeIn(tween(260, delayMillis = 50))) togetherWith
-                    (slideOutHorizontally(slide) { -dir * it / 6 } + scaleOut(grow, targetScale = 0.96f) + fadeOut(tween(160)))
-            },
-            label = "page",
-        ) { target ->
-            // Follows the back gesture on the sub-pages; the main page never moves with it.
-            val scrub = if (target == Page.Main) Modifier else Modifier.graphicsLayer {
-                val p = backProgress
-                val sc = 1f - 0.1f * p
-                scaleX = sc
-                scaleY = sc
-                translationX = (if (backFromLeft) 1f else -1f) * 28.dp.toPx() * p
-                alpha = 1f - 0.3f * p
-            }
-            Box(Modifier.fillMaxSize().then(scrub)) {
-                when (target) {
-                    Page.Settings -> SettingsScreen(
-                        status = status,
-                        deviceSettings = deviceSettings,
-                        firmware = info.firmware,
-                        deviceName = name,
-                        appPrefs = prefs,
-                        onFahrenheit = controller::setFahrenheit,
-                        onEcoCharge = controller::setEcoCharge,
-                        onEcoVoltage = controller::setEcoVoltage,
-                        onBoostVisualization = controller::setBoostVisualization,
-                        onBrightness = controller::setBrightness,
-                        onVibration = controller::setVibration,
-                        onBoostTimeoutDisabled = controller::setBoostTimeoutDisabled,
-                        onFindMy = controller::findMyDevice,
-                        onAppPrefs = app.prefs::setApp,
-                        onBack = { page = Page.Main },
-                    )
-                    Page.History -> HistoryScreen(
-                        history = history,
-                        lifetimePuffs = lifetimePuffs,
-                        fahrenheit = status?.fahrenheit == true,
-                        onClear = app.sessions::clearHistory,
-                        onBack = { page = Page.Main },
-                    )
-                    Page.Main -> Column(
-                        Modifier
-                            .fillMaxSize()
-                            .safeDrawingPadding()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 20.dp),
-                    ) {
-                        TopBar(
-                            name = name,
-                            status = status,
-                            demo = (connection as? ConnectionState.Connected)?.demo == true,
-                            onHistory = { openPage(Page.History) },
-                            onSettings = { openPage(Page.Settings) },
-                            onDisconnect = controller::disconnect,
-                            onForget = controller::forgetDevice,
-                        )
-                        SessionDoneCard(
-                            record = doneSession,
-                            fahrenheit = status?.fahrenheit == true,
-                            onDismiss = { doneSession = null },
-                        )
-                        AnimatedVisibility(visible = notice != null, enter = expandVertically(), exit = shrinkVertically()) {
-                            Banner(notice ?: "", icon = Icons.Rounded.Info, action = undo?.let { u ->
-                                "Undo" to {
-                                    u()
-                                    undo = null
-                                    notice = null
-                                }
-                            })
-                        }
-                        AnimatedVisibility(
-                            visible = connection is ConnectionState.Reconnecting,
-                            enter = expandVertically(),
-                            exit = shrinkVertically(),
-                        ) {
-                            val r = connection as? ConnectionState.Reconnecting
-                            Banner("Connection lost, reconnecting…" + (r?.reason?.let { "\n$it" } ?: ""))
-                        }
-
-                        val s = status
-                        if (s == null) {
-                            ConnectingPlaceholder(name, onCancel = controller::disconnect)
-                        } else {
-                            Dashboard(
-                                s = s,
-                                info = info,
-                                live = live,
-                                presets = presets,
-                                batterySamples = batterySamples,
-                                lifetimePuffs = lifetimePuffs,
-                                onTarget = controller::setTarget,
-                                onMode = controller::setHeaterMode,
-                                onBoost = controller::setBoostOffset,
-                                onSuperBoost = controller::setSuperBoostOffset,
-                                onAddPreset = app.prefs::addPreset,
-                                onRemovePreset = { p ->
-                                    val at = presets.indexOf(p)
-                                    app.prefs.removePreset(p)
-                                    undo = { app.prefs.insertPreset(at, p) }
-                                    showNotice("Removed preset ${p.name}", forMs = 5000)
-                                },
-                            )
-                        }
-                        Spacer(Modifier.height(24.dp))
+            AnimatedContent(
+                targetState = page,
+                transitionSpec = {
+                    // Shared axis: both pages travel the same way on a spring, the incoming one
+                    // growing from 96 % as it fades up and the outgoing one receding. Going back
+                    // follows the swipe: a right-edge back keeps the page moving left, the way the
+                    // gesture was already carrying it, instead of jumping round.
+                    val dir = when {
+                        targetState != Page.Main -> 1
+                        backFromLeft -> -1
+                        else -> 1
                     }
+                    val slide = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold)
+                    val grow = spring<Float>(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow)
+                    (slideInHorizontally(slide) { dir * it / 5 } + scaleIn(grow, initialScale = 0.96f) + fadeIn(tween(260, delayMillis = 50))) togetherWith
+                        (slideOutHorizontally(slide) { -dir * it / 6 } + scaleOut(grow, targetScale = 0.96f) + fadeOut(tween(120)))
+                },
+                label = "page",
+            ) { target ->
+                // Follows the back gesture on the sub-pages; the main page never moves with it.
+                val scrub = if (target == Page.Main) Modifier else Modifier.graphicsLayer {
+                    val p = backProgress
+                    val sc = 1f - 0.1f * p
+                    scaleX = sc
+                    scaleY = sc
+                    translationX = (if (backFromLeft) 1f else -1f) * 28.dp.toPx() * p
+                    alpha = 1f - 0.3f * p
+                }
+                Box(Modifier.fillMaxSize().then(scrub)) {
+                    when (target) {
+                        Page.Settings -> SettingsScreen(
+                            status = status,
+                            deviceSettings = deviceSettings,
+                            firmware = info.firmware,
+                            deviceName = name,
+                            appPrefs = prefs,
+                            onFahrenheit = controller::setFahrenheit,
+                            onEcoCharge = controller::setEcoCharge,
+                            onEcoVoltage = controller::setEcoVoltage,
+                            onBoostVisualization = controller::setBoostVisualization,
+                            onBrightness = controller::setBrightness,
+                            onVibration = controller::setVibration,
+                            onBoostTimeoutDisabled = controller::setBoostTimeoutDisabled,
+                            onFindMy = controller::findMyDevice,
+                            onAppPrefs = app.prefs::setApp,
+                            onBack = { closePage() },
+                        )
+                        Page.History -> HistoryScreen(
+                            history = history,
+                            lifetimePuffs = lifetimePuffs,
+                            fahrenheit = status?.fahrenheit == true,
+                            onClear = app.sessions::clearHistory,
+                            onBack = { closePage() },
+                        )
+                        Page.Main -> Column(
+                            Modifier
+                                .fillMaxSize()
+                                .safeDrawingPadding()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 20.dp),
+                        ) {
+                            TopBar(
+                                name = name,
+                                status = status,
+                                demo = (connection as? ConnectionState.Connected)?.demo == true,
+                                onHistory = { openPage(Page.History) },
+                                onSettings = { openPage(Page.Settings) },
+                                onDisconnect = controller::disconnect,
+                                onForget = controller::forgetDevice,
+                            )
+                            HeatHairline(status, live) { phaseColor }
+                            SessionDoneCard(
+                                record = doneSession,
+                                fahrenheit = status?.fahrenheit == true,
+                                onDismiss = { latestSession?.let { dismissedSession = it.startMs } },
+                                animateIn = doneSession != null && doneSession.startMs != playedSession,
+                                onPlayed = { doneSession?.let { playedSession = it.startMs } },
+                            )
+                            AnimatedVisibility(visible = notice != null, enter = expandVertically(), exit = shrinkVertically()) {
+                                Banner(notice ?: "", icon = Icons.Rounded.Info, action = undo?.let { u ->
+                                    "Undo" to {
+                                        u()
+                                        undo = null
+                                        notice = null
+                                    }
+                                })
+                            }
+                            AnimatedVisibility(
+                                visible = connection is ConnectionState.Reconnecting,
+                                enter = expandVertically(),
+                                exit = shrinkVertically(),
+                            ) {
+                                val r = connection as? ConnectionState.Reconnecting
+                                Banner("Connection lost, reconnecting…" + (r?.reason?.let { "\n$it" } ?: ""))
+                            }
+
+                            val s = status
+                            if (s == null) {
+                                ConnectingPlaceholder(name, onCancel = controller::disconnect)
+                            } else {
+                                Dashboard(
+                                    s = s,
+                                    info = info,
+                                    live = live,
+                                    presets = presets,
+                                    batterySamples = batterySamples,
+                                    lifetimePuffs = lifetimePuffs,
+                                    onTarget = controller::setTarget,
+                                    onMode = controller::setHeaterMode,
+                                    onBoost = controller::setBoostOffset,
+                                    onSuperBoost = controller::setSuperBoostOffset,
+                                    intro = !introDone,
+                                    onIntroShown = { introDone = true },
+                                    onShockwave = { at, color ->
+                                        scope.launch { shockwave.fire(at - rootOffset, color) }
+                                    },
+                                    onAddPreset = app.prefs::addPreset,
+                                    onRemovePreset = { p ->
+                                        val at = presets.indexOf(p)
+                                        app.prefs.removePreset(p)
+                                        undo = { app.prefs.insertPreset(at, p) }
+                                        showNotice("Removed preset ${p.name}", forMs = 5000)
+                                    },
+                                )
+                            }
+                            Spacer(Modifier.height(24.dp))
+                        }
+                    }
+                    // The status bar picks up the heater's colour on the main page, fading down
+                    // into the content so it reads as light spilling from the top.
+                    if (target == Page.Main) StatusBarGlow { phaseColor }
                 }
             }
         }
+        ShockwaveRing(shockwave)
+    }
+}
+
+/** A wash of [color] behind the status bar, fading out 24 dp below it. */
+@Composable
+private fun StatusBarGlow(color: () -> Color) {
+    val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    Spacer(
+        Modifier
+            .fillMaxWidth()
+            .height(top + 24.dp)
+            .drawBehind {
+                // Read while drawing, so the colour easing between phases only redraws.
+                val c = color()
+                drawRect(Brush.verticalGradient(listOf(c.copy(alpha = 0.35f), c.copy(alpha = 0.12f), Color.Transparent)))
+            },
+    )
+}
+
+/**
+ * A 2 dp line under the top bar while the heater climbs to temperature. It fills with the
+ * estimated heat-up progress, a highlight running along it; with no estimate yet, a shimmer
+ * sweeps back and forth instead. Folds away once the Venty is ready.
+ */
+@Composable
+private fun HeatHairline(s: VentyStatus?, live: LiveSession?, tint: () -> Color) {
+    val heatingUp = s != null && s.heaterMode.isHeating && !s.setpointReached
+    // elapsed / (elapsed + eta), recomputed whenever the session reports a fresh estimate.
+    val eta = live?.etaSeconds
+    val fraction: Float? = if (heatingUp && live != null && eta != null) {
+        val elapsed = ((System.currentTimeMillis() - live.startMs) / 1000f).coerceAtLeast(0f)
+        if (elapsed + eta <= 0f) null else (elapsed / (elapsed + eta)).coerceIn(0f, 1f)
+    } else {
+        null
+    }
+    AnimatedVisibility(
+        visible = heatingUp,
+        enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+        exit = fadeOut(tween(400)) + shrinkVertically(tween(400, delayMillis = 150)),
+    ) {
+        val shown by animateFloatAsState(fraction ?: 0f, spring(dampingRatio = 1f, stiffness = Spring.StiffnessVeryLow), label = "heatFraction")
+        val known by animateFloatAsState(if (fraction != null) 1f else 0f, tween(400), label = "heatKnown")
+        val run by rememberInfiniteTransition(label = "hairline").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1400, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
+            label = "hairlineRun",
+        )
+        Spacer(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp, bottom = 6.dp)
+                .height(2.dp)
+                .clip(RoundedCornerShape(50))
+                .drawWithCache {
+                    val color = tint()
+                    val track = color.copy(alpha = 0.14f)
+                    val fill = Brush.horizontalGradient(listOf(color.copy(alpha = 0.6f), color, VentyColors.Ember))
+                    val bandW = size.width * 0.28f
+                    val band = Brush.horizontalGradient(
+                        listOf(Color.Transparent, Color.White.copy(alpha = 0.85f), Color.Transparent),
+                        startX = 0f,
+                        endX = bandW,
+                    )
+                    val glow = Brush.horizontalGradient(
+                        listOf(Color.Transparent, color, Color.Transparent),
+                        startX = 0f,
+                        endX = bandW,
+                    )
+                    onDrawBehind {
+                        drawRect(track)
+                        val k = known
+                        // Determinate: the filled part, with a highlight running along it.
+                        if (k > 0.01f) {
+                            val w = size.width * shown
+                            drawRect(fill, size = Size(w, size.height), alpha = k)
+                            val x = -bandW + (w + bandW) * run
+                            clipRect(right = w) {
+                                translate(left = x) { drawRect(band, size = Size(bandW, size.height), alpha = k) }
+                            }
+                        }
+                        // Indeterminate: a glowing band sweeping the whole width.
+                        if (k < 0.99f) {
+                            val x = -bandW + (size.width + bandW) * run
+                            translate(left = x) {
+                                drawRect(glow, size = Size(bandW, size.height), alpha = 1f - k)
+                                drawRect(band, size = Size(bandW, size.height), alpha = (1f - k) * 0.6f)
+                            }
+                        }
+                    }
+                },
+        )
     }
 }
 
@@ -393,10 +541,17 @@ private fun Dashboard(
     onMode: (HeaterMode) -> Unit,
     onBoost: (Int) -> Unit,
     onSuperBoost: (Int) -> Unit,
+    /** True the first time the dashboard shows, when its sections lift in one after another. */
+    intro: Boolean,
+    onIntroShown: () -> Unit,
+    /** Fires the heat shockwave from a point in root coordinates, in the given colour. */
+    onShockwave: (Offset, Color) -> Unit,
     onAddPreset: (Preset) -> Unit,
     onRemovePreset: (Preset) -> Unit,
 ) {
     val f = s.fahrenheit
+    // The entrance modifiers keep the value they first saw, so this can flip straight away.
+    LaunchedEffect(Unit) { onIntroShown() }
 
     val view = LocalView.current
     val unit = Temperature.unit(f)
@@ -412,7 +567,9 @@ private fun Dashboard(
     }
 
     // Dragging the dial's ring: show the finger's value, tick on each degree, write on release.
-    // Within 2° of a saved preset the value is pulled onto it, with its own click and its name.
+    // Near a saved preset the value is pulled onto it, with its own click and its name. The pull
+    // has hysteresis: it grabs within 1° and lets go past 2°, so two close presets don't fight
+    // over the finger and the degrees between them stay reachable.
     var dragTenths by remember { mutableStateOf<Int?>(null) }
     var snapped by remember { mutableStateOf<Preset?>(null) }
     val dragDisplay = dragTenths?.let { Temperature.toDisplay(it, f) }
@@ -428,15 +585,26 @@ private fun Dashboard(
             snapped = null
         } else {
             val d = Temperature.toDisplay(t, f)
-            val magnet = presets
-                .map { it to abs(Temperature.toDisplay(it.tenthsC + boostDelta, f) - d) }
-                .filter { it.second <= 2 }
+            // Where each preset sits on the dial, which can't go past the top of the range.
+            fun onDial(p: Preset) = (p.tenthsC + boostDelta).coerceAtMost(VentyProtocol.MAX_TARGET)
+            fun gap(p: Preset) = abs(Temperature.toDisplay(onDial(p), f) - d)
+            val held = snapped?.takeIf { it in presets && gap(it) <= 2 }
+            val closest = presets
+                .map { it to gap(it) }
+                .filter { it.second <= 1 }
                 .minByOrNull { it.second }
-                ?.first
+            // Stay on the held preset unless another is strictly nearer the finger.
+            val magnet = if (held == null) {
+                closest?.first
+            } else if (closest != null && closest.second < gap(held)) {
+                closest.first
+            } else {
+                held
+            }
             if (magnet != null) {
                 if (magnet != snapped) view.snapConfirm()
                 snapped = magnet
-                dragTenths = magnet.tenthsC + boostDelta
+                dragTenths = onDial(magnet)
             } else {
                 val atEnd = t <= VentyProtocol.MIN_TARGET || t >= VentyProtocol.MAX_TARGET
                 if (d != prev) view.detent(heavy = d % 10 == 0 || atEnd)
@@ -462,7 +630,7 @@ private fun Dashboard(
         dimArc = current == null && !s.setpointReached,
         ready = heating && s.setpointReached,
         energy = s.heaterMode.code,
-        modifier = Modifier.padding(horizontal = 4.dp).enterFromBelow(0),
+        modifier = Modifier.padding(horizontal = 4.dp).enterFromBelow(0, intro),
         onDrag = onDialDrag,
     ) {
         Text(
@@ -507,12 +675,17 @@ private fun Dashboard(
     }
 
     LiveSessionStrip(live, Modifier.padding(bottom = 12.dp))
-    Box(Modifier.enterFromBelow(80)) { TargetCard(s, onTarget) }
+    Box(Modifier.enterFromBelow(80, intro)) { TargetCard(s, onTarget) }
     Spacer(Modifier.height(2.dp))
-    Box(Modifier.enterFromBelow(120)) { PresetsRow(presets, s, onTarget, onAddPreset, onRemovePreset) }
+    Box(Modifier.enterFromBelow(120, intro)) { PresetsRow(presets, s, onTarget, onAddPreset, onRemovePreset) }
     Spacer(Modifier.height(6.dp))
-    Box(Modifier.enterFromBelow(160)) {
-        HeaterButton(on = s.heaterMode.isHeating, onToggle = { onMode(if (s.heaterMode.isHeating) HeaterMode.Off else HeaterMode.On) })
+    Box(Modifier.enterFromBelow(160, intro)) {
+        HeaterButton(on = s.heaterMode.isHeating, onToggle = { at ->
+            val turningOn = !s.heaterMode.isHeating
+            // The shockwave takes the colour of the phase being entered.
+            onShockwave(at, if (turningOn) VentyColors.Heat else VentyColors.Cool)
+            onMode(if (turningOn) HeaterMode.On else HeaterMode.Off)
+        })
     }
     AnimatedVisibility(visible = s.heaterMode.isHeating, enter = expandVertically(), exit = shrinkVertically()) {
         Column {
@@ -521,11 +694,11 @@ private fun Dashboard(
         }
     }
     Spacer(Modifier.height(16.dp))
-    Box(Modifier.enterFromBelow(240)) { BoostOffsetsCard(s, onBoost, onSuperBoost) }
+    Box(Modifier.enterFromBelow(240, intro)) { BoostOffsetsCard(s, onBoost, onSuperBoost) }
     Spacer(Modifier.height(16.dp))
-    Box(Modifier.enterFromBelow(280)) { BatteryCard(s, batterySamples) }
+    Box(Modifier.enterFromBelow(280, intro)) { BatteryCard(s, batterySamples) }
     Spacer(Modifier.height(16.dp))
-    Column(Modifier.enterFromBelow(320)) { InfoRow(s, info, lifetimePuffs) }
+    Column(Modifier.enterFromBelow(320, intro)) { InfoRow(s, info, lifetimePuffs) }
 }
 
 private enum class HeaterPhase(val label: String) {
@@ -576,17 +749,14 @@ private fun PresetsRow(
         animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
         label = "presetBreathe",
     )
-    // Lazy keys must be unique, so a (rare) duplicate preset gets a counter on its key.
-    val keyed = remember(presets) {
-        val seen = HashMap<Preset, Int>()
-        presets.map { p ->
-            val n = seen.getOrElse(p) { 0 }
-            seen[p] = n + 1
-            "${p.name}|${p.tenthsC}|$n" to p
-        }
-    }
-    // Chips that weren't there when the row first showed pop in rather than just fading.
-    val initial = remember { presets.toSet() }
+    // Each chip gets an id that sticks to it while it stays in the list, so removing one (even
+    // one of two identical presets) never re-keys the others, and a preset added back later
+    // counts as new.
+    val ids = remember { PresetIds() }
+    val keyed = remember(presets) { ids.assign(presets) }
+    // Chips that weren't there when the row first showed pop in rather than just fading, once:
+    // scrolling one out of view and back doesn't replay it.
+    val popped = remember { HashSet<Int>().apply { keyed.forEach { add(it.first) } } }
     val exists = presets.any { it.tenthsC == s.targetTenths }
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -594,13 +764,15 @@ private fun PresetsRow(
         contentPadding = PaddingValues(vertical = 10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        items(keyed, key = { it.first }) { (_, p) ->
+        items(keyed, key = { it.first }) { (id, p) ->
             val selected = p.tenthsC == s.targetTenths
             val bg by animateColorAsState(if (selected) VentyColors.Heat.copy(alpha = 0.22f) else VentyColors.Surface, label = "presetBg")
             val border by animateColorAsState(if (selected) VentyColors.Heat else Color.White.copy(alpha = 0.08f), label = "presetBorder")
             val glow by animateFloatAsState(if (selected) 1f else 0f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessLow), label = "presetGlow")
-            val pop = remember { Animatable(if (p in initial) 1f else 0.6f) }
-            LaunchedEffect(Unit) { pop.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow)) }
+            val pop = remember { Animatable(if (id in popped) 1f else 0.6f) }
+            LaunchedEffect(Unit) {
+                if (popped.add(id)) pop.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow))
+            }
             val interaction = remember { MutableInteractionSource() }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -681,6 +853,23 @@ private fun PresetsRow(
     }
 }
 
+/** Hands out lazy-list ids for presets, keeping each one's id for as long as it stays listed. */
+private class PresetIds {
+    private var current: List<Pair<Int, Preset>> = emptyList()
+    private var next = 0
+
+    fun assign(presets: List<Preset>): List<Pair<Int, Preset>> {
+        val pool = current.toMutableList()
+        val out = presets.map { p ->
+            // Identical presets match in order, so the earlier of two duplicates keeps its id.
+            val i = pool.indexOfFirst { it.second == p }
+            (if (i >= 0) pool.removeAt(i).first else next++) to p
+        }
+        current = out
+        return out
+    }
+}
+
 /** Battery level, a 24 h sparkline and an estimate of time left from the recent drain rate. */
 @Composable
 private fun BatteryCard(s: VentyStatus, samples: List<BatterySample>) {
@@ -701,7 +890,14 @@ private fun BatteryCard(s: VentyStatus, samples: List<BatterySample>) {
         s.battery < 35 -> VentyColors.Warning
         else -> VentyColors.Heat
     }
-    Card {
+    // While charging, the card fills from the bottom with green liquid up to the charge level.
+    val fill by animateFloatAsState(
+        if (s.charging) s.battery / 100f else 0f,
+        spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessVeryLow),
+        label = "chargeFill",
+    )
+    val wet by remember { derivedStateOf { fill > 0.004f } }
+    Card(if (wet) Modifier.chargeLiquid { fill } else Modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Battery", style = MaterialTheme.typography.labelLarge, color = VentyColors.Muted)
@@ -709,17 +905,131 @@ private fun BatteryCard(s: VentyStatus, samples: List<BatterySample>) {
                     RollingNumber(s.battery, MaterialTheme.typography.displaySmall, MaterialTheme.colorScheme.onSurface)
                     Text("%", style = MaterialTheme.typography.titleMedium, color = VentyColors.Muted, modifier = Modifier.padding(start = 2.dp, bottom = 6.dp))
                 }
-                Text(
-                    when {
-                        s.charging -> "Charging"
-                        estimate != null -> "About ${estimate.toInt()} h ${((estimate % 1) * 60).toInt()} m left at this pace"
-                        else -> "Learning your drain rate…"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (s.charging) VentyColors.Ready else VentyColors.Muted,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (s.charging) {
+                        ChargingBolt()
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        when {
+                            s.charging -> "Charging"
+                            estimate != null -> "About ${estimate.toInt()} h ${((estimate % 1) * 60).toInt()} m left at this pace"
+                            else -> "Learning your drain rate…"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (s.charging) VentyColors.Ready else VentyColors.Muted,
+                    )
+                }
             }
             Sparkline(day, color, Modifier.width(130.dp).height(56.dp))
+        }
+    }
+}
+
+/** A small bolt that throbs with a soft glow while the battery charges. */
+@Composable
+private fun ChargingBolt() {
+    val beat by rememberInfiniteTransition(label = "bolt").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "boltBeat",
+    )
+    Icon(
+        Icons.Rounded.Bolt,
+        contentDescription = null,
+        tint = VentyColors.Ready,
+        modifier = Modifier
+            .size(14.dp)
+            .drawBehind {
+                drawCircle(VentyColors.Ready.copy(alpha = 0.35f * beat), radius = size.minDimension * (0.6f + 0.4f * beat))
+            }
+            .graphicsLayer {
+                val sc = 0.88f + 0.2f * beat
+                scaleX = sc
+                scaleY = sc
+                alpha = 0.7f + 0.3f * beat
+            },
+    )
+}
+
+private class Bubble(val x: Float, val speed: Float, val phase: Float, val radiusDp: Float)
+
+/**
+ * Charging liquid behind a card's content: a body of green up to [level] of the height whose
+ * surface is two sine waves rolling past each other, a glowing line on the crest and bubbles
+ * rising through it. One reused Path; the gradients are rebuilt only when the size changes.
+ */
+private fun Modifier.chargeLiquid(level: () -> Float): Modifier = composed {
+    val t = rememberInfiniteTransition(label = "liquid")
+    val roll by t.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(3200, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
+        label = "liquidRoll",
+    )
+    val bubbles = remember {
+        val r = kotlin.random.Random(5)
+        List(7) { Bubble(0.08f + r.nextFloat() * 0.84f, 1f + r.nextFloat() * 1.5f, r.nextFloat(), 1.5f + r.nextFloat() * 2f) }
+    }
+    val path = remember { androidx.compose.ui.graphics.Path() }
+    drawWithCache {
+        val green = VentyColors.Ready
+        val back = green.copy(alpha = 0.08f)
+        val body = Brush.verticalGradient(listOf(green.copy(alpha = 0.20f), green.copy(alpha = 0.07f)))
+        val glowStroke = androidx.compose.ui.graphics.drawscope.Stroke(6.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        val crestStroke = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        val amp = 4.dp.toPx()
+        val ring = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx())
+        val twoPi = 2f * PI.toFloat()
+        val steps = 36
+        onDrawBehind {
+            val w = size.width
+            val h = size.height
+            val lv = level().coerceIn(0f, 1f)
+            // At 0 % the whole wave sits just under the bottom edge, so it drains away fully.
+            val top = h * (1f - lv) + amp * (1f - lv)
+            val a = roll * twoPi
+
+            // One wave layer: the surface plus, when [close], the body down to the bottom edge.
+            fun wave(speed: Float, shift: Float, ampScale: Float, close: Boolean) {
+                path.rewind()
+                for (i in 0..steps) {
+                    val x = w * i / steps
+                    val u = x / w * twoPi
+                    val y = top + amp * ampScale * (0.65f * sin(u * 1.4f + a * speed + shift) + 0.35f * sin(u * 3.1f - a * speed * 2f + shift * 2f))
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                if (close) {
+                    path.lineTo(w, h)
+                    path.lineTo(0f, h)
+                    path.close()
+                }
+            }
+
+            // The back wave runs the other way, slower, for depth.
+            wave(-0.6f, 1.7f, 0.8f, close = true)
+            drawPath(path, back)
+            wave(1f, 0f, 1f, close = true)
+            drawPath(path, body)
+            // Crest: a soft glow under a bright hairline, along the front wave only.
+            wave(1f, 0f, 1f, close = false)
+            drawPath(path, green.copy(alpha = 0.18f), style = glowStroke)
+            drawPath(path, green.copy(alpha = 0.75f), style = crestStroke)
+
+            // Bubbles rise from the bottom and fade out as they reach the surface.
+            val depth = h - top
+            if (depth > 8.dp.toPx()) {
+                for (b in bubbles) {
+                    val p = (roll * b.speed + b.phase) % 1f
+                    val y = h - depth * p
+                    val x = w * b.x + 4.dp.toPx() * sin(p * twoPi * 2f + b.phase * 6f)
+                    val alpha = (1f - p) * 0.6f * (p * 6f).coerceAtMost(1f)
+                    val r = b.radiusDp.dp.toPx()
+                    drawCircle(green.copy(alpha = alpha * 0.35f), radius = r, center = Offset(x, y))
+                    drawCircle(green.copy(alpha = alpha), radius = r, center = Offset(x, y), style = ring)
+                }
+            }
         }
     }
 }
@@ -770,7 +1080,20 @@ private fun StatusPill(phase: HeaterPhase, s: VentyStatus) {
     ) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(8.dp))
-        Text(phase.label + extra, style = MaterialTheme.typography.labelLarge, color = color)
+        // The new label rises in as the old one drops away, and the pill eases to its width.
+        AnimatedContent(
+            targetState = phase.label + extra,
+            transitionSpec = {
+                (fadeIn(tween(220, delayMillis = 60)) + slideInVertically(tween(260)) { it / 2 }) togetherWith
+                    (fadeOut(tween(120)) + slideOutVertically(tween(200)) { -it / 2 }) using
+                    SizeTransform(clip = false) { _, _ ->
+                        spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntSize.VisibilityThreshold)
+                    }
+            },
+            label = "pillLabel",
+        ) { label ->
+            Text(label, style = MaterialTheme.typography.labelLarge, color = color)
+        }
     }
 }
 
@@ -920,10 +1243,17 @@ private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
     }
 }
 
+/** [onToggle] gets the tap's position in root coordinates, for the shockwave to start from. */
 @Composable
-private fun HeaterButton(on: Boolean, onToggle: () -> Unit) {
+private fun HeaterButton(on: Boolean, onToggle: (Offset) -> Unit) {
     val haptics = LocalHapticFeedback.current
     val interaction = remember { MutableInteractionSource() }
+    // Where the button sits in the root, and where in it the finger last went down.
+    val placed = remember { arrayOf(Offset.Zero, Offset.Zero) } // top-left, middle (local)
+    val pressAt = remember { arrayOf(Offset.Unspecified) }
+    LaunchedEffect(interaction) {
+        interaction.interactions.collect { if (it is PressInteraction.Press) pressAt[0] = it.pressPosition }
+    }
     val fill by animateFloatAsState(if (on) 0f else 1f, tween(450), label = "heaterFill")
     val content by animateColorAsState(if (on) VentyColors.Heat else Color(0xFF1A0D05), label = "heaterFg")
     val iconTurn by animateFloatAsState(if (on) 180f else 0f, spring(dampingRatio = 0.6f), label = "iconTurn")
@@ -934,6 +1264,11 @@ private fun HeaterButton(on: Boolean, onToggle: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .height(68.dp)
+            .onGloballyPositioned {
+                // Not boundsInRoot, which is clipped to what's on screen.
+                placed[0] = it.positionInRoot()
+                placed[1] = Offset(it.size.width / 2f, it.size.height / 2f)
+            }
             .pressScale(interaction, 0.97f)
             .drawBehind {
                 // Glow under the button when it's the call to action.
@@ -959,7 +1294,10 @@ private fun HeaterButton(on: Boolean, onToggle: () -> Unit) {
             .border(1.dp, VentyColors.Heat.copy(alpha = 0.35f * (1f - fill)), shape)
             .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple()) {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                onToggle()
+                // A keyboard or accessibility click has no press point, so use the middle.
+                val local = pressAt[0]
+                onToggle(placed[0] + if (local.isSpecified) local else placed[1])
+                pressAt[0] = Offset.Unspecified
             },
     ) {
         Icon(
@@ -1146,14 +1484,16 @@ private fun ConnectingPlaceholder(name: String, onCancel: () -> Unit) {
     }
 }
 
+/** [backdrop] draws over the card's fill and under its content, clipped to its shape. */
 @Composable
-private fun Card(content: @Composable () -> Unit) {
+private fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(24.dp)
     Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh, VentyColors.Surface)))
+            .then(backdrop)
             .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)), shape)
             .padding(20.dp),
     ) { content() }

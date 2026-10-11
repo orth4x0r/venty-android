@@ -53,6 +53,16 @@ import kotlin.random.Random
 @Composable
 fun LavaLayer(level: Float, color: Color, modifier: Modifier = Modifier) {
     val strength by animateFloatAsState(level, tween(1400), label = "lavaLevel")
+    // Hold the last boost colour while the lava drains away, so dropping out of boost doesn't
+    // turn it green or blue on the way out, and blend between boost and superboost.
+    val held = remember { arrayOf(color) }
+    if (level > 0f) held[0] = color
+    val tintAnim = remember { androidx.compose.animation.Animatable(held[0]) }
+    LaunchedEffect(held[0]) {
+        // Nothing on screen yet: take the new colour at once rather than fading in from the last.
+        if (strength < 0.01f) tintAnim.snapTo(held[0]) else tintAnim.animateTo(held[0], tween(700))
+    }
+    val tint = tintAnim.value
     if (strength < 0.01f) return
     val t by rememberInfiniteTransition(label = "lava").animateFloat(
         initialValue = 0f,
@@ -69,6 +79,7 @@ fun LavaLayer(level: Float, color: Color, modifier: Modifier = Modifier) {
     // full superboost alpha and each draw scales them back down by strength / 1.5.
     Spacer(
         modifier.fillMaxSize().drawWithCache {
+            val color = tint
             val hot = androidx.compose.ui.graphics.lerp(color, Color(0xFFFFD27A), 0.35f)
             val floor = Brush.verticalGradient(
                 0f to Color.Transparent,
