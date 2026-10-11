@@ -1,9 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Soft glow behind the dial, inside the 66dp safe zone -->
+    <path android:pathData="M54,22 A32,32 0 1,1 54,86 A32,32 0 1,1 54,22 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="54"
+                android:gradientRadius="32">
+                <item android:offset="0" android:color="#55FF7A3D" />
+                <item android:offset="0.6" android:color="#22FF7A3D" />
+                <item android:offset="1" android:color="#00FF7A3D" />
+            </gradient>
+        </aapt:attr>
+    </path>
     <!-- Track: 270 degree arc, radius 22, centred at 54,54, open at the bottom -->
     <path
         android:pathData="M38.44,69.56 A22,22 0 1,1 69.56,69.56"
@@ -11,13 +26,25 @@
         android:strokeColor="#33FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000" />
-    <!-- Heat: from the left end round to the top right -->
+    <!-- Heat: from the left end round to the top right, warming from ember to hot red -->
     <path
         android:pathData="M38.44,69.56 A22,22 0 1,1 73.05,43"
         android:strokeWidth="6"
-        android:strokeColor="#FFFF7A3D"
         android:strokeLineCap="round"
-        android:fillColor="#00000000" />
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="38"
+                android:startY="70"
+                android:endX="74"
+                android:endY="40">
+                <item android:offset="0" android:color="#FFFFB27A" />
+                <item android:offset="0.5" android:color="#FFFF7A3D" />
+                <item android:offset="1" android:color="#FFFF4D2A" />
+            </gradient>
+        </aapt:attr>
+    </path>
     <!-- Centre drop -->
     <path
         android:pathData="M54,42 C58,48 61,52 61,56.5 A7,7 0 0,1 47,56.5 C47,52 50,48 54,42 Z"

@@ -1,6 +1,16 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.view.HapticFeedbackConstants
+import android.view.View
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -9,7 +19,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,9 +30,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -30,10 +42,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.dp
 import io.github.orth4x0r.venty.ble.VentyProtocol
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +66,19 @@ import kotlin.math.sin
 
 private const val START_ANGLE = 135f
 private const val SWEEP = 270f
+private val TRACK = Color(0xFF2E2622)
+private val TICK = Color(0x33FFFFFF)
+private val MARKER_FILL = Color(0xFF0F0D0C)
+
+/** Where the ring sits inside a dial of [size]; shared by the cached draw layers. */
+private class DialGeometry(size: Size) {
+    val stroke = size.minDimension * 0.06f
+    private val inset = stroke / 2 + size.minDimension * 0.06f
+    val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
+    val topLeft = Offset(inset, inset)
+    val radius = arcSize.width / 2
+    val center = Offset(size.width / 2, size.height / 2)
+}
 
 private fun fraction(tenthsC: Int?): Float {
     if (tenthsC == null) return 0f
@@ -108,6 +139,44 @@ fun TemperatureDial(
         label = "coronaAngle",
     )
     val arcAlpha by animateFloatAsState(if (dimArc) 0.45f else 1f, tween(600), label = "arcAlpha")
+    // A white-hot flash along the whole ring the moment the setpoint is reached. Not on first
+    // show, so opening the app on an already-hot Venty doesn't flash.
+    val flash = remember { Animatable(0f) }
+    val wasReady = remember { booleanArrayOf(ready) }
+    LaunchedEffect(ready) {
+        if (ready && !wasReady[0]) {
+            flash.snapTo(1f)
+            flash.animateTo(0f, tween(600, easing = FastOutSlowInEasing))
+        }
+        wasReady[0] = ready
+    }
+
+    // Boost whoosh: dropping into boost or superboost punches the dial outwards on a bouncy
+    // spring and fires a burst of speed lines; superboost adds two pink shock rings. Seeded
+    // with the first value so opening the app mid-boost stays calm.
+    val punch = remember { Animatable(1f) }
+    val whoosh = remember { Animatable(1f) }
+    val lastEnergy = remember { intArrayOf(energy) }
+    val whooshSuper = remember { booleanArrayOf(false) }
+    // Not tied to the effect, so a quick second mode change can't freeze the lines mid-flight.
+    val fxScope = rememberCoroutineScope()
+    val view = LocalView.current
+    LaunchedEffect(energy) {
+        val prev = lastEnergy[0]
+        lastEnergy[0] = energy
+        if (energy >= 2 && energy != prev) {
+            whooshSuper[0] = energy >= 3
+            fxScope.launch {
+                whoosh.snapTo(0f)
+                whoosh.animateTo(1f, tween(if (energy >= 3) 950 else 700, easing = LinearOutSlowInEasing))
+            }
+            fxScope.launch {
+                punch.animateTo(1.07f, tween(110, easing = FastOutSlowInEasing))
+                punch.animateTo(1f, spring(dampingRatio = 0.32f, stiffness = Spring.StiffnessMediumLow))
+            }
+            view.boostRumble()
+        }
+    }
 
     val dragModifier = if (onDrag == null) Modifier else Modifier.pointerInput(Unit) {
         awaitEachGesture {
@@ -149,123 +218,160 @@ fun TemperatureDial(
         }
     }
 
-    Box(modifier.fillMaxWidth().aspectRatio(1f).then(dragModifier), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize()) {
-            // Read the pulse here, in drawing, so it redraws the canvas without recomposing.
-            val glowAlpha = if (pulsing) pulse else if (ready) 0.2f else 0.12f
-            val stroke = size.minDimension * 0.06f
-            val inset = stroke / 2 + size.minDimension * 0.06f
-            val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
-            val topLeft = Offset(inset, inset)
-            val radius = arcSize.width / 2
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(color.copy(alpha = glowAlpha), Color.Transparent),
-                    radius = size.minDimension / 2,
-                ),
-            )
-
-            // Corona: a rotating ring of light outside the track, stronger in boost.
-            if (coronaLevel > 0.01f) {
-                val r = radius + stroke * 1.4f
-                rotate(corona) {
-                    drawCircle(
-                        brush = Brush.sweepGradient(
-                            listOf(
-                                Color.Transparent,
-                                color.copy(alpha = 0.55f * coronaLevel),
-                                Color.Transparent,
-                                color.copy(alpha = 0.3f * coronaLevel),
-                                Color.Transparent,
-                            ),
-                        ),
-                        radius = r,
-                        style = Stroke(stroke * (0.25f + 0.35f * coronaLevel)),
+    Box(
+        modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .graphicsLayer {
+                scaleX = punch.value
+                scaleY = punch.value
+            }
+            .then(dragModifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Three cached layers, bottom to top. Each builds its brushes only when its own inputs
+        // change (size, colour, the arc's length) and the per-frame values, the pulse, corona
+        // spin, shimmer and marker swell, are applied as draw alpha, rotation or scale.
+        Spacer(
+            Modifier
+                .fillMaxSize()
+                // Glow, corona, track and ticks.
+                .drawWithCache {
+                    val g = DialGeometry(size)
+                    val glowBrush = Brush.radialGradient(listOf(color, Color.Transparent), radius = size.minDimension / 2)
+                    val coronaBrush = Brush.sweepGradient(
+                        listOf(Color.Transparent, color.copy(alpha = 0.55f), Color.Transparent, color.copy(alpha = 0.3f), Color.Transparent),
                     )
+                    val trackStroke = Stroke(g.stroke, cap = StrokeCap.Round)
+                    // Tick marks every 10 °C, worked out once per size.
+                    val ticks = (VentyProtocol.MAX_TARGET - VentyProtocol.MIN_TARGET) / 100
+                    val tickPoints = FloatArray((ticks + 1) * 4)
+                    for (i in 0..ticks) {
+                        val angle = Math.toRadians((START_ANGLE + SWEEP * i / ticks).toDouble())
+                        val outer = g.radius - g.stroke * 0.95f
+                        val inner = outer - if (i % 5 == 1) g.stroke * 0.55f else g.stroke * 0.3f
+                        tickPoints[i * 4] = g.center.x + (cos(angle) * inner).toFloat()
+                        tickPoints[i * 4 + 1] = g.center.y + (sin(angle) * inner).toFloat()
+                        tickPoints[i * 4 + 2] = g.center.x + (cos(angle) * outer).toFloat()
+                        tickPoints[i * 4 + 3] = g.center.y + (sin(angle) * outer).toFloat()
+                    }
+                    val tickWidth = 2.dp.toPx()
+                    onDrawBehind {
+                        // Read the pulse here, in drawing, so it redraws without recomposing.
+                        val glowAlpha = if (pulsing) pulse else if (ready) 0.2f else 0.12f
+                        drawCircle(glowBrush, alpha = glowAlpha)
+
+                        // Corona: a rotating ring of light outside the track, stronger in boost.
+                        val level = coronaLevel
+                        if (level > 0.01f) {
+                            rotate(corona) {
+                                drawCircle(
+                                    brush = coronaBrush,
+                                    radius = g.radius + g.stroke * 1.4f,
+                                    alpha = level,
+                                    style = Stroke(g.stroke * (0.25f + 0.35f * level)),
+                                )
+                            }
+                        }
+
+                        drawArc(TRACK, START_ANGLE, SWEEP, false, g.topLeft, g.arcSize, style = trackStroke)
+                        for (i in 0..ticks) {
+                            drawLine(
+                                TICK,
+                                Offset(tickPoints[i * 4], tickPoints[i * 4 + 1]),
+                                Offset(tickPoints[i * 4 + 2], tickPoints[i * 4 + 3]),
+                                strokeWidth = tickWidth,
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                    }
                 }
-            }
-
-            // Track with tick marks every 10 °C.
-            drawArc(Color(0xFF2E2622), START_ANGLE, SWEEP, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
-            val ticks = (VentyProtocol.MAX_TARGET - VentyProtocol.MIN_TARGET) / 100
-            for (i in 0..ticks) {
-                val angle = Math.toRadians((START_ANGLE + SWEEP * i / ticks).toDouble())
-                val outer = radius - stroke * 0.95f
-                val inner = outer - if (i % 5 == 1) stroke * 0.55f else stroke * 0.3f
-                val c = this.center
-                drawLine(
-                    Color(0x33FFFFFF),
-                    Offset(c.x + (cos(angle) * inner).toFloat(), c.y + (sin(angle) * inner).toFloat()),
-                    Offset(c.x + (cos(angle) * outer).toFloat(), c.y + (sin(angle) * outer).toFloat()),
-                    strokeWidth = 2.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-            }
-
-            // Current temperature arc. The sweep gradient is rotated so it starts at the arc's start.
-            if (current > 0.002f) {
-                rotate(START_ANGLE) {
-                    drawArc(
-                        brush = Brush.sweepGradient(
-                            0f to color.copy(alpha = 0.35f * arcAlpha),
-                            (SWEEP / 360f) * current to color.copy(alpha = arcAlpha),
-                            1f to color.copy(alpha = arcAlpha),
-                        ),
-                        startAngle = 0f,
-                        sweepAngle = SWEEP * current,
-                        useCenter = false,
-                        topLeft = topLeft,
-                        size = arcSize,
-                        style = Stroke(stroke, cap = StrokeCap.Round),
+                // The current-temperature arc. Its gradient depends on the arc's length, so this
+                // layer rebuilds only while the arc is actually moving.
+                .drawWithCache {
+                    val g = DialGeometry(size)
+                    val c = current
+                    val a = arcAlpha
+                    // The sweep gradient is rotated so it starts at the arc's start.
+                    val arcBrush = Brush.sweepGradient(
+                        0f to color.copy(alpha = 0.35f * a),
+                        (SWEEP / 360f) * c to color.copy(alpha = a),
+                        1f to color.copy(alpha = a),
                     )
+                    val arcStroke = Stroke(g.stroke, cap = StrokeCap.Round)
+                    val sparkStroke = Stroke(g.stroke * 0.45f, cap = StrokeCap.Round)
+                    val endR = g.stroke * 2.2f
+                    val endGlow = Brush.radialGradient(listOf(color.copy(alpha = 0.55f * a), Color.Transparent), center = Offset.Zero, radius = endR)
+                    val endAngle = Math.toRadians((START_ANGLE + SWEEP * c).toDouble())
+                    val end = Offset(g.center.x + (cos(endAngle) * g.radius).toFloat(), g.center.y + (sin(endAngle) * g.radius).toFloat())
+                    onDrawBehind {
+                        if (c > 0.002f) {
+                            rotate(START_ANGLE) {
+                                drawArc(arcBrush, 0f, SWEEP * c, false, g.topLeft, g.arcSize, style = arcStroke)
+                            }
+                        }
+
+                        // A bright spark that runs along the arc while heating.
+                        val sa = shimmerAlpha
+                        if (sa > 0.01f && c > 0.02f) {
+                            val len = 0.12f
+                            val head = shimmer * (1f + len)
+                            val from = (head - len).coerceIn(0f, 1f) * c
+                            val to = head.coerceIn(0f, 1f) * c
+                            if (to > from) {
+                                drawArc(
+                                    Color.White.copy(alpha = 0.55f * sa * a),
+                                    START_ANGLE + SWEEP * from,
+                                    SWEEP * (to - from),
+                                    false,
+                                    g.topLeft,
+                                    g.arcSize,
+                                    style = sparkStroke,
+                                )
+                            }
+                        }
+
+                        // End cap glow where the arc currently ends.
+                        if (c > 0.02f) {
+                            translate(end.x, end.y) { drawCircle(endGlow, radius = endR, center = Offset.Zero) }
+                        }
+
+                        // Ready flash: the whole ring goes white-hot for a moment, then cools.
+                        val fl = flash.value
+                        if (fl > 0.005f) {
+                            drawArc(
+                                color.copy(alpha = 0.45f * fl),
+                                START_ANGLE, SWEEP, false, g.topLeft, g.arcSize,
+                                style = Stroke(g.stroke * (1f + 1.6f * fl), cap = StrokeCap.Round),
+                            )
+                            drawArc(
+                                Color.White.copy(alpha = 0.9f * fl),
+                                START_ANGLE, SWEEP, false, g.topLeft, g.arcSize,
+                                style = arcStroke,
+                            )
+                        }
+                    }
                 }
-            }
-
-            // A bright spark that runs along the arc while heating.
-            if (shimmerAlpha > 0.01f && current > 0.02f) {
-                val len = 0.12f
-                val head = shimmer * (1f + len)
-                val from = (head - len).coerceIn(0f, 1f) * current
-                val to = head.coerceIn(0f, 1f) * current
-                if (to > from) {
-                    drawArc(
-                        Color.White.copy(alpha = 0.55f * shimmerAlpha * arcAlpha),
-                        START_ANGLE + SWEEP * from,
-                        SWEEP * (to - from),
-                        false,
-                        topLeft,
-                        arcSize,
-                        style = Stroke(stroke * 0.45f, cap = StrokeCap.Round),
-                    )
-                }
-            }
-
-            // End cap glow where the arc currently ends.
-            if (current > 0.02f) {
-                val endAngle = Math.toRadians((START_ANGLE + SWEEP * current).toDouble())
-                val end = Offset(this.center.x + (cos(endAngle) * radius).toFloat(), this.center.y + (sin(endAngle) * radius).toFloat())
-                drawCircle(
-                    Brush.radialGradient(listOf(color.copy(alpha = 0.55f * arcAlpha), Color.Transparent), center = end, radius = stroke * 2.2f),
-                    radius = stroke * 2.2f,
-                    center = end,
-                )
-            }
-
-            // Target marker: a ring sitting on the track.
-            val tAngle = Math.toRadians((START_ANGLE + SWEEP * target).toDouble())
-            val marker = Offset(this.center.x + (cos(tAngle) * radius).toFloat(), this.center.y + (sin(tAngle) * radius).toFloat())
-            val mr = stroke * 0.85f * markerScale
-            if (markerScale > 1.01f) {
-                drawCircle(
-                    Brush.radialGradient(listOf(color.copy(alpha = 0.6f), Color.Transparent), center = marker, radius = mr * 2.6f),
-                    radius = mr * 2.6f,
-                    center = marker,
-                )
-            }
-            drawCircle(Color(0xFF0F0D0C), radius = mr, center = marker)
-            drawCircle(Color.White, radius = mr, center = marker, style = Stroke(stroke * 0.28f))
-        }
+                // Target marker: a ring sitting on the track.
+                .drawWithCache {
+                    val g = DialGeometry(size)
+                    val baseR = g.stroke * 0.85f
+                    val haloR = baseR * 2.6f
+                    val halo = Brush.radialGradient(listOf(color.copy(alpha = 0.6f), Color.Transparent), center = Offset.Zero, radius = haloR)
+                    val ringStroke = Stroke(g.stroke * 0.28f)
+                    onDrawBehind {
+                        val tAngle = Math.toRadians((START_ANGLE + SWEEP * target).toDouble())
+                        val ms = markerScale
+                        translate(g.center.x + (cos(tAngle) * g.radius).toFloat(), g.center.y + (sin(tAngle) * g.radius).toFloat()) {
+                            if (ms > 1.01f) {
+                                scale(ms, pivot = Offset.Zero) { drawCircle(halo, radius = haloR, center = Offset.Zero) }
+                            }
+                            drawCircle(MARKER_FILL, radius = baseR * ms, center = Offset.Zero)
+                            drawCircle(Color.White, radius = baseR * ms, center = Offset.Zero, style = ringStroke)
+                        }
+                    }
+                },
+        )
         io.github.orth4x0r.venty.ui.Embers(
             active = pulsing || energy >= 2,
             color = color,
@@ -273,10 +379,92 @@ fun TemperatureDial(
             modifier = Modifier.fillMaxSize(),
         )
         io.github.orth4x0r.venty.ui.ReadyBurst(trigger = ready, color = color, modifier = Modifier.fillMaxSize())
+        // Speed lines and superboost rings, drawn only while the whoosh plays.
+        Spacer(
+            Modifier
+                .fillMaxSize()
+                .drawWithCache {
+                    val g = DialGeometry(size)
+                    // Fixed jitter per line, so the burst looks hand-thrown but never flickers.
+                    val rnd = java.util.Random(11)
+                    val jitter = FloatArray(SPEED_LINES * 2) { rnd.nextFloat() }
+                    val lineW = 2.5.dp.toPx()
+                    onDrawBehind {
+                        val p = whoosh.value
+                        if (p >= 1f) return@onDrawBehind
+                        val fade = 1f - p
+                        val hot = androidx.compose.ui.graphics.lerp(color, Color.White, 0.45f)
+                        for (i in 0 until SPEED_LINES) {
+                            val angle = Math.toRadians((360.0 / SPEED_LINES) * i + jitter[i * 2] * 9.0)
+                            val speed = 0.8f + 0.4f * jitter[i * 2 + 1]
+                            val inner = g.radius * (1.02f + 0.55f * p * speed)
+                            val outer = inner + g.radius * (0.10f + 0.22f * fade) * speed
+                            val cx = cos(angle).toFloat()
+                            val sy = sin(angle).toFloat()
+                            drawLine(
+                                hot.copy(alpha = 0.85f * fade),
+                                Offset(g.center.x + cx * inner, g.center.y + sy * inner),
+                                Offset(g.center.x + cx * outer, g.center.y + sy * outer),
+                                strokeWidth = lineW * (0.5f + fade),
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                        if (whooshSuper[0]) {
+                            for (k in 0..1) {
+                                // Second ring trails the first by a quarter of the way.
+                                val q = ((p * 1.3f) - k * 0.3f).coerceIn(0f, 1f)
+                                if (q <= 0f || q >= 1f) continue
+                                drawCircle(
+                                    io.github.orth4x0r.venty.ui.theme.VentyColors.SuperBoost.copy(alpha = 0.7f * (1f - q)),
+                                    radius = g.radius * (0.95f + 0.75f * q),
+                                    center = g.center,
+                                    style = Stroke(g.stroke * 0.6f * (1f - q) + 1.dp.toPx()),
+                                )
+                            }
+                        }
+                    }
+                },
+        )
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
             content()
         }
     }
+}
+
+private const val SPEED_LINES = 24
+
+/**
+ * A rising buzz that lands on a thud for boost, where the vibrator can play primitives
+ * (Android 11+). Otherwise, or if anything goes wrong, a plain long-press haptic.
+ */
+private fun View.boostRumble() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && composeRumble()) return
+    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+}
+
+@RequiresApi(Build.VERSION_CODES.R)
+private fun View.composeRumble(): Boolean = try {
+    val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION")
+        context.getSystemService(Vibrator::class.java)
+    }
+    val rise = VibrationEffect.Composition.PRIMITIVE_QUICK_RISE
+    val thud = VibrationEffect.Composition.PRIMITIVE_THUD
+    if (vibrator == null || !vibrator.hasVibrator() || !vibrator.areAllPrimitivesSupported(rise, thud)) {
+        false
+    } else {
+        vibrator.vibrate(
+            VibrationEffect.startComposition()
+                .addPrimitive(rise, 0.7f)
+                .addPrimitive(thud, 1f, 30)
+                .compose(),
+        )
+        true
+    }
+} catch (e: Exception) {
+    false
 }
 
 /** Maps a point on the dial to a target in tenths of °C, clamping the gap at the bottom. */

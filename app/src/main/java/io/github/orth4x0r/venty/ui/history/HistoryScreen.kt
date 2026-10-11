@@ -1,8 +1,8 @@
 package io.github.orth4x0r.venty.ui.history
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -58,8 +58,9 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.format.TextStyle
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val CHART_DAYS = 14
 
@@ -95,6 +96,9 @@ fun HistoryScreen(
         }
     }
     val avgPuffs = if (history.isEmpty()) 0.0 else history.sumOf { it.puffs }.toDouble() / history.size
+    // Rows animate in only the first time they appear, not every time the list scrolls back
+    // over them.
+    val entered = remember { HashSet<Long>() }
 
     // Transparent, so the dashboard's ambient glow carries through.
     Box(Modifier.fillMaxSize()) {
@@ -138,10 +142,16 @@ fun HistoryScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = VentyColors.Muted,
                             letterSpacing = 1.5.sp,
-                            modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+                            modifier = Modifier.enterFromBelow(160).padding(top = 8.dp, start = 4.dp),
                         )
                     }
-                    items(history, key = { it.startMs }) { SessionRow(it, zone, fahrenheit) }
+                    itemsIndexed(history, key = { _, r -> r.startMs }) { i, r ->
+                        // Decided once per row: the first screenful staggers in, later rows
+                        // scrolled into view for the first time just rise without waiting.
+                        val animate = remember { entered.add(r.startMs) }
+                        val rowModifier = if (animate) Modifier.enterFromBelow(if (i < 10) 200 + i * 45 else 0) else Modifier
+                        SessionRow(r, zone, fahrenheit, rowModifier)
+                    }
                     item(key = "end") { Spacer(Modifier.height(16.dp)) }
                 }
             }
@@ -199,7 +209,7 @@ private fun Hero(lifetimePuffs: Int, sessionsThisWeek: Int, avgPuffs: Double, mo
         modifier
             .fillMaxWidth()
             .background(
-                Brush.verticalGradient(listOf(VentyColors.Heat.copy(alpha = 0.16f), VentyColors.Surface)),
+                Brush.verticalGradient(listOf(VentyColors.Heat.copy(alpha = 0.16f), VentyColors.Surface.copy(alpha = 0.7f))),
                 shape,
             )
             .border(1.dp, VentyColors.Track, shape)
@@ -230,17 +240,22 @@ private fun MiniStat(value: String, label: String) {
 
 @Composable
 private fun ChartCard(perDay: List<Int>, today: LocalDate, modifier: Modifier = Modifier) {
-    val progress = remember { Animatable(0f) }
-    LaunchedEffect(perDay) {
-        progress.snapTo(0f)
-        progress.animateTo(1f, tween(1100, easing = FastOutSlowInEasing))
+    // Each bar grows from nothing on its own spring, a beat after the one to its left.
+    val grow = remember { List(CHART_DAYS) { Animatable(0f) } }
+    LaunchedEffect(Unit) {
+        grow.forEachIndexed { i, a ->
+            launch {
+                delay(180L + i * 40L)
+                a.animateTo(1f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessLow))
+            }
+        }
     }
     val shape = RoundedCornerShape(20.dp)
     val max = (perDay.maxOrNull() ?: 0).coerceAtLeast(1)
     Column(
         modifier
             .fillMaxWidth()
-            .background(VentyColors.Surface, shape)
+            .background(VentyColors.Surface.copy(alpha = 0.7f), shape)
             .border(1.dp, VentyColors.Track, shape)
             .padding(16.dp),
     ) {
@@ -263,39 +278,49 @@ private fun ChartCard(perDay: List<Int>, today: LocalDate, modifier: Modifier = 
             val stub = barW
             for (i in 0 until n) {
                 val x = slot * i + (slot - barW) / 2f
-                // Each bar starts a little after the one before it.
-                val p = FastOutSlowInEasing.transform(((progress.value * 1.8f) - i * 0.05f).coerceIn(0f, 1f))
+                val p = grow.getOrNull(i)?.value ?: 1f
                 val value = perDay[i]
-                val h = if (value == 0) stub * 0.5f else stub + (size.height - stub) * (value.toFloat() / max) * p
+                val isToday = i == n - 1
+                val full = if (value == 0) stub * 0.5f else stub + (size.height - stub) * (value.toFloat() / max)
+                val h = full * p
+                if (h < 0.5f) continue
                 val top = size.height - h
-                if (value == 0) {
-                    drawRoundRect(VentyColors.Track, Offset(x, top), Size(barW, h), radius)
-                } else {
-                    drawRoundRect(
-                        Brush.verticalGradient(
-                            listOf(VentyColors.Ember, VentyColors.Heat),
-                            startY = top,
-                            endY = size.height,
-                        ),
-                        Offset(x, top),
-                        Size(barW, h),
-                        radius,
-                    )
+                when {
+                    // Today gets the full heat gradient and a soft glow; the rest stay quiet.
+                    isToday && value > 0 -> {
+                        drawRoundRect(
+                            VentyColors.Heat.copy(alpha = 0.18f),
+                            Offset(x - barW * 0.35f, top - barW * 0.35f),
+                            Size(barW * 1.7f, h + barW * 0.35f),
+                            CornerRadius(barW, barW),
+                        )
+                        drawRoundRect(
+                            Brush.verticalGradient(listOf(VentyColors.Ember, VentyColors.Heat), startY = top, endY = size.height),
+                            Offset(x, top),
+                            Size(barW, h),
+                            radius,
+                        )
+                    }
+                    isToday -> drawRoundRect(VentyColors.Heat.copy(alpha = 0.45f), Offset(x, top), Size(barW, h), radius)
+                    value == 0 -> drawRoundRect(VentyColors.Track, Offset(x, top), Size(barW, h), radius)
+                    else -> drawRoundRect(VentyColors.Heat.copy(alpha = 0.38f), Offset(x, top), Size(barW, h), radius)
                 }
             }
         }
         Spacer(Modifier.height(6.dp))
+        // Day of the month under every bar; narrow weekday letters repeated twice were ambiguous.
         Row(Modifier.fillMaxWidth()) {
             for (i in 0 until perDay.size) {
                 val day = today.minusDays((perDay.size - 1 - i).toLong())
                 val isToday = i == perDay.size - 1
                 Text(
-                    day.dayOfWeek.getDisplayName(TextStyle.NARROW, Locale.getDefault()),
+                    day.dayOfMonth.toString(),
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (isToday) VentyColors.Heat else VentyColors.Muted,
                     fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
                 )
             }
         }
@@ -303,7 +328,7 @@ private fun ChartCard(perDay: List<Int>, today: LocalDate, modifier: Modifier = 
 }
 
 @Composable
-private fun SessionRow(r: SessionRecord, zone: ZoneId, fahrenheit: Boolean) {
+private fun SessionRow(r: SessionRecord, zone: ZoneId, fahrenheit: Boolean, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(16.dp)
     val start = Instant.ofEpochMilli(r.startMs).atZone(zone)
     val totalSec = ((r.endMs - r.startMs) / 1000L).coerceAtLeast(0L)
@@ -313,9 +338,9 @@ private fun SessionRow(r: SessionRecord, zone: ZoneId, fahrenheit: Boolean) {
         "%d:%02d".format(totalSec / 60, totalSec % 60)
     }
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
-            .background(VentyColors.SurfaceHigh, shape)
+            .background(VentyColors.SurfaceHigh.copy(alpha = 0.7f), shape)
             .border(1.dp, VentyColors.Track, shape)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

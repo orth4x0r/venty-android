@@ -1,10 +1,15 @@
 package io.github.orth4x0r.venty.ui
 
+import android.graphics.RenderEffect as PlatformRenderEffect
+import android.graphics.RuntimeShader
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -22,24 +27,36 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
+import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -64,34 +81,33 @@ fun AmbientBackground(tint: Color, intensity: Float, modifier: Modifier = Modifi
         animationSpec = infiniteRepeatable(tween(3200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "breathe",
     )
-    Canvas(modifier.fillMaxSize()) {
-        drawRect(VentyColors.Background)
-        val a = drift * 2 * PI.toFloat()
-        val c1 = Offset(size.width * (0.5f + 0.18f * sin(a)), size.height * (0.28f + 0.05f * sin(a * 2)))
-        val c2 = Offset(size.width * (0.5f - 0.22f * sin(a + 1.3f)), size.height * (0.78f + 0.04f * sin(a + 0.7f)))
-        drawRect(
-            Brush.radialGradient(
-                listOf(color.copy(alpha = 0.22f * strength * breathe), Color.Transparent),
-                center = c1,
-                radius = size.width * 0.95f,
-            ),
-        )
-        drawRect(
-            Brush.radialGradient(
-                listOf(color.copy(alpha = 0.10f * strength), Color.Transparent),
-                center = c2,
-                radius = size.width * 0.8f,
-            ),
-        )
-        // A soft vignette keeps the edges dark and the content in focus.
-        drawRect(
-            Brush.radialGradient(
+    // Gradients are built once per size and colour, at the origin, then moved into place each
+    // frame, so the drift and breathing never allocate.
+    Spacer(
+        modifier.fillMaxSize().drawWithCache {
+            val r1 = size.width * 0.95f
+            val r2 = size.width * 0.8f
+            val blob1 = Brush.radialGradient(listOf(color.copy(alpha = 0.22f), Color.Transparent), center = Offset.Zero, radius = r1)
+            val blob2 = Brush.radialGradient(listOf(color.copy(alpha = 0.10f), Color.Transparent), center = Offset.Zero, radius = r2)
+            // A soft vignette keeps the edges dark and the content in focus.
+            val vignette = Brush.radialGradient(
                 listOf(Color.Transparent, Color.Black.copy(alpha = 0.45f)),
                 center = Offset(size.width / 2, size.height * 0.4f),
                 radius = size.maxDimension * 0.75f,
-            ),
-        )
-    }
+            )
+            onDrawBehind {
+                drawRect(VentyColors.Background)
+                val a = drift * 2 * PI.toFloat()
+                translate(size.width * (0.5f + 0.18f * sin(a)), size.height * (0.28f + 0.05f * sin(a * 2))) {
+                    drawCircle(blob1, radius = r1, center = Offset.Zero, alpha = strength * breathe)
+                }
+                translate(size.width * (0.5f - 0.22f * sin(a + 1.3f)), size.height * (0.78f + 0.04f * sin(a + 0.7f))) {
+                    drawCircle(blob2, radius = r2, center = Offset.Zero, alpha = strength)
+                }
+                drawRect(vignette)
+            }
+        },
+    )
 }
 
 /** Shrinks slightly while pressed and springs back, so taps feel physical. */
@@ -105,10 +121,16 @@ fun Modifier.pressScale(interaction: MutableInteractionSource, pressedScale: Flo
     graphicsLayer { scaleX = scale; scaleY = scale }
 }
 
-/** Fades and lifts content in after [delayMs], for staggered screen entrances. */
-fun Modifier.enterFromBelow(delayMs: Int): Modifier = composed {
-    val progress = remember { Animatable(0f) }
+/**
+ * Fades and lifts content in after [delayMs], for staggered screen entrances. With [enabled]
+ * false it shows at rest; only its value on first composition counts, so flipping it later
+ * never cuts a running entrance short.
+ */
+fun Modifier.enterFromBelow(delayMs: Int, enabled: Boolean = true): Modifier = composed {
+    val animate = remember { enabled }
+    val progress = remember { Animatable(if (animate) 0f else 1f) }
     LaunchedEffect(Unit) {
+        if (!animate) return@LaunchedEffect
         delay(delayMs.toLong())
         progress.animateTo(1f, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow))
     }
@@ -133,12 +155,31 @@ fun RollingNumber(value: Int, style: TextStyle, color: Color, modifier: Modifier
             // Key digits from the right so a change in length doesn't reshuffle the rest.
             val key = text.length - i
             androidx.compose.runtime.key(key) {
+                // Slot-machine smear: while a digit rolls it stretches and blurs vertically,
+                // sharpening as it lands. Seeded with the first digit so showing never smears.
+                val settle = remember { Animatable(1f) }
+                val lastCh = remember { charArrayOf(ch) }
+                LaunchedEffect(ch) {
+                    if (ch == lastCh[0]) return@LaunchedEffect
+                    lastCh[0] = ch
+                    settle.snapTo(0f)
+                    settle.animateTo(1f, tween(260, easing = LinearOutSlowInEasing))
+                }
                 AnimatedContent(
                     targetState = ch,
                     transitionSpec = {
                         val dir = if (goingUp) 1 else -1
                         (slideInVertically(tween(220)) { h -> h * dir } + fadeIn(tween(220))) togetherWith
                             (slideOutVertically(tween(220)) { h -> -h * dir } + fadeOut(tween(160)))
+                    },
+                    modifier = Modifier.graphicsLayer {
+                        val smear = 1f - settle.value
+                        scaleY = 1f + 0.12f * smear
+                        renderEffect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && smear > 0.02f) {
+                            BlurEffect(0f, 6.dp.toPx() * smear, TileMode.Decal)
+                        } else {
+                            null
+                        }
                     },
                     label = "digit",
                 ) { c ->
@@ -197,15 +238,20 @@ fun Embers(active: Boolean, color: Color, modifier: Modifier = Modifier, rate: F
     }
 }
 
-/** An expanding ring that fires once each time [trigger] changes to true. */
+/**
+ * An expanding ring that fires each time [trigger] goes from false to true while shown. Seeded
+ * with the first value, so coming back to a screen that is already ready doesn't replay it.
+ */
 @Composable
 fun ReadyBurst(trigger: Boolean, color: Color, modifier: Modifier = Modifier) {
     val ring = remember { Animatable(1f) }
+    val was = remember { booleanArrayOf(trigger) }
     LaunchedEffect(trigger) {
-        if (trigger) {
+        if (trigger && !was[0]) {
             ring.snapTo(0f)
             launch { ring.animateTo(1f, tween(1100, easing = FastOutSlowInEasing)) }
         }
+        was[0] = trigger
     }
     Canvas(modifier) {
         val p = ring.value
@@ -239,6 +285,127 @@ fun ColorFlash(key: Any?, color: Color, modifier: Modifier = Modifier) {
                 radius = size.maxDimension,
             ),
         )
+    }
+}
+
+/**
+ * A one-shot ring that races out across the whole screen from where the heater was tapped.
+ * [ShockwaveRing] draws it; [shockwaveDistortion] on the content underneath bends the pixels
+ * just behind the ring front (Android 13+), so the screen looks to ripple as it passes.
+ */
+@Stable
+class Shockwave {
+    internal val progress = Animatable(1f)
+    internal var origin by mutableStateOf(Offset.Zero)
+    internal var color by mutableStateOf(Color.White)
+
+    /** [at] is in the coordinates of the box that holds the ring and the distorted content. */
+    suspend fun fire(at: Offset, color: Color) {
+        origin = at
+        this.color = color
+        progress.snapTo(0f)
+        progress.animateTo(1f, tween(700, easing = LinearOutSlowInEasing))
+    }
+}
+
+@Composable
+fun rememberShockwave(): Shockwave = remember { Shockwave() }
+
+/** How far the ring has got, as a radius, at progress [p] for an area of [w] x [h]. */
+private fun shockRadius(origin: Offset, w: Float, h: Float, p: Float): Float {
+    // Far enough to clear the furthest corner, so the ring always leaves the screen.
+    val reach = max(max(hypot(origin.x, origin.y), hypot(w - origin.x, origin.y)), max(hypot(origin.x, h - origin.y), hypot(w - origin.x, h - origin.y)))
+    return reach * 1.05f * p
+}
+
+@Composable
+fun ShockwaveRing(wave: Shockwave, modifier: Modifier = Modifier) {
+    Canvas(modifier.fillMaxSize()) {
+        val p = wave.progress.value
+        if (p >= 1f) return@Canvas
+        val r = shockRadius(wave.origin, size.width, size.height, p)
+        val fade = 1f - p
+        // A wide soft halo with a crisp front on top; both thin out and fade as they travel.
+        drawCircle(
+            wave.color.copy(alpha = 0.18f * fade),
+            radius = r,
+            center = wave.origin,
+            style = Stroke(width = 34.dp.toPx() * fade + 2.dp.toPx()),
+        )
+        drawCircle(
+            wave.color.copy(alpha = 0.75f * fade),
+            radius = r,
+            center = wave.origin,
+            style = Stroke(width = 6.dp.toPx() * fade + 1.dp.toPx()),
+        )
+    }
+}
+
+/**
+ * Bends the content radially just inside the ring front while [wave] plays. Needs Android 13
+ * for AGSL; on older phones, or if the shader won't build, the ring plays on its own.
+ */
+fun Modifier.shockwaveDistortion(wave: Shockwave): Modifier = composed {
+    val shader = remember { if (Build.VERSION.SDK_INT >= 33) ShockShader.create() else null }
+    if (shader == null) {
+        this
+    } else {
+        graphicsLayer {
+            val p = wave.progress.value
+            renderEffect = if (p < 1f && Build.VERSION.SDK_INT >= 33) {
+                ShockShader.effect(
+                    shader,
+                    wave.origin,
+                    shockRadius(wave.origin, size.width, size.height, p),
+                    28.dp.toPx(),
+                    14.dp.toPx() * (1f - p) * (1f - p),
+                )
+            } else {
+                null
+            }
+        }
+    }
+}
+
+/** The API 33 half of the shockwave, kept apart so older phones never load RuntimeShader. */
+private object ShockShader {
+    // Samples from slightly nearer the centre in a soft band around the ring front, which
+    // pushes that band of pixels outwards, like a lens riding on the wave.
+    private const val SRC = """
+        uniform shader content;
+        uniform float2 origin;
+        uniform float radius;
+        uniform float band;
+        uniform float strength;
+        half4 main(float2 coord) {
+            float2 d = coord - origin;
+            float dist = length(d);
+            float x = (dist - radius) / band;
+            float w = exp(-x * x * 2.0);
+            float2 dir = dist > 0.5 ? d / dist : float2(0.0, 0.0);
+            return content.eval(coord - dir * strength * w);
+        }
+    """
+
+    fun create(): Any? = if (Build.VERSION.SDK_INT >= 33) build() else null
+
+    @RequiresApi(33)
+    private fun build(): Any? = try {
+        RuntimeShader(SRC)
+    } catch (e: Exception) {
+        null
+    }
+
+    @RequiresApi(33)
+    fun effect(shader: Any, origin: Offset, radius: Float, band: Float, strength: Float): androidx.compose.ui.graphics.RenderEffect? = try {
+        val s = shader as RuntimeShader
+        s.setFloatUniform("origin", origin.x, origin.y)
+        s.setFloatUniform("radius", radius)
+        s.setFloatUniform("band", band)
+        s.setFloatUniform("strength", strength)
+        PlatformRenderEffect.createRuntimeShaderEffect(s, "content").asComposeRenderEffect()
+    } catch (e: Exception) {
+        null
     }
 }
 

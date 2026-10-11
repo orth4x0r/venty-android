@@ -35,6 +35,13 @@ class PrefsStore(context: Context) {
 
     fun removePreset(preset: Preset) = savePresets(_presets.value - preset)
 
+    /** Puts [preset] back at [index], for undo. Skipped if an identical one is already there. */
+    fun insertPreset(index: Int, preset: Preset) {
+        val list = _presets.value
+        if (preset in list) return
+        savePresets(list.toMutableList().apply { add(index.coerceIn(0, size), preset) }.take(MAX_PRESETS))
+    }
+
     private fun loadApp() = AppPrefs(
         dynamicColor = sp.getBoolean("dynamic_color", false),
         keepScreenOn = sp.getBoolean("keep_screen_on", true),

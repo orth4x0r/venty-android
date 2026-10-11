@@ -22,13 +22,17 @@ import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.ble.ConnectionState
 import io.github.orth4x0r.venty.ble.HeaterMode
 import io.github.orth4x0r.venty.ble.VentyStatus
+import io.github.orth4x0r.venty.session.LiveSession
 import io.github.orth4x0r.venty.ui.Temperature
+import io.github.orth4x0r.venty.ui.theme.VentyColors
+import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -56,15 +60,20 @@ class VentyService : Service() {
             return
         }
         scope.launch {
-            // Ignore the auto-off countdown so the notification isn't rebuilt every second.
-            combine(app.controller.status, app.controller.connection) { s, c -> s?.copy(autoOffSeconds = 0) to c }
+            // The live session only matters here for its start time and the heat-up percentage,
+            // so the notification is rebuilt when those move, not on every status poll.
+            val session = app.sessions.live
+                .map { l -> l?.let { SessionKey(it.startMs, heatUpPercent(it)) } }
                 .distinctUntilChanged()
-                .collect { (s, c) ->
+            // Ignore the auto-off countdown so the notification isn't rebuilt every second.
+            combine(app.controller.status, app.controller.connection, session) { s, c, l -> Triple(s?.copy(autoOffSeconds = 0), c, l) }
+                .distinctUntilChanged()
+                .collect { (s, c, l) ->
                 if (c is ConnectionState.Idle || c is ConnectionState.Failed || c is ConnectionState.Scanning) {
                     stopSelf()
                     return@collect
                 }
-                notify(ONGOING_ID, buildOngoing(s, c))
+                notify(ONGOING_ID, buildOngoing(s, c, l))
                 checkAlerts(s)
             }
         }
@@ -124,7 +133,7 @@ class VentyService : Service() {
         .setAutoCancel(true)
         .setContentIntent(openApp())
 
-    private fun buildOngoing(s: VentyStatus?, c: ConnectionState): Notification {
+    private fun buildOngoing(s: VentyStatus?, c: ConnectionState, session: SessionKey? = null): Notification {
         val title: String
         val text: String
         if (s == null || c !is ConnectionState.Connected) {
@@ -152,6 +161,22 @@ class VentyService : Service() {
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setContentIntent(openApp())
+        if (s != null && c is ConnectionState.Connected && s.heaterMode.isHeating) {
+            // Colorized while heating (honoured for foreground services), tinted for the mode.
+            val tint = when (s.heaterMode) {
+                HeaterMode.SuperBoost -> VentyColors.SuperBoost
+                HeaterMode.Boost -> VentyColors.Boost
+                else -> if (s.setpointReached) VentyColors.Ready else VentyColors.Heat
+            }
+            b.setColor(tint.toArgb()).setColorized(true)
+            // A running session clock, counting from when the heater went on.
+            if (session != null) b.setUsesChronometer(true).setShowWhen(true).setWhen(session.startMs)
+            // Heat-up progress until the setpoint is reached; indeterminate without an estimate.
+            if (!s.setpointReached) {
+                val pct = session?.heatPercent
+                b.setProgress(100, pct ?: 0, pct == null)
+            }
+        }
         if (s != null && c is ConnectionState.Connected) {
             b.addAction(0, if (s.heaterMode.isHeating) "Heater off" else "Heat", action(ACTION_TOGGLE, 1))
             if (s.heaterMode.isHeating) {
@@ -180,6 +205,18 @@ class VentyService : Service() {
     private fun notify(id: Int, n: Notification) {
         if (!canNotify(this)) return
         getSystemService(NotificationManager::class.java).notify(id, n)
+    }
+
+    /** What the ongoing notification needs from the live session. */
+    private data class SessionKey(val startMs: Long, val heatPercent: Int?)
+
+    /** How far through the estimated heat-up we are, 0-100, or null when there's no estimate. */
+    private fun heatUpPercent(l: LiveSession): Int? {
+        val eta = l.etaSeconds ?: return null
+        val elapsed = ((System.currentTimeMillis() - l.startMs) / 1000L).coerceAtLeast(0L)
+        val total = elapsed + eta
+        if (total <= 0L) return null
+        return (elapsed * 100 / total).toInt().coerceIn(0, 100)
     }
 
     companion object {

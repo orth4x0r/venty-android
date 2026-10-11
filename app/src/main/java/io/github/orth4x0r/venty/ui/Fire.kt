@@ -24,11 +24,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -49,6 +53,16 @@ import kotlin.random.Random
 @Composable
 fun LavaLayer(level: Float, color: Color, modifier: Modifier = Modifier) {
     val strength by animateFloatAsState(level, tween(1400), label = "lavaLevel")
+    // Hold the last boost colour while the lava drains away, so dropping out of boost doesn't
+    // turn it green or blue on the way out, and blend between boost and superboost.
+    val held = remember { arrayOf(color) }
+    if (level > 0f) held[0] = color
+    val tintAnim = remember { androidx.compose.animation.Animatable(held[0]) }
+    LaunchedEffect(held[0]) {
+        // Nothing on screen yet: take the new colour at once rather than fading in from the last.
+        if (strength < 0.01f) tintAnim.snapTo(held[0]) else tintAnim.animateTo(held[0], tween(700))
+    }
+    val tint = tintAnim.value
     if (strength < 0.01f) return
     val t by rememberInfiniteTransition(label = "lava").animateFloat(
         initialValue = 0f,
@@ -60,42 +74,57 @@ fun LavaLayer(level: Float, color: Color, modifier: Modifier = Modifier) {
         val r = Random(7)
         List(9) { Triple(r.nextFloat(), 0.6f + r.nextFloat() * 0.8f, r.nextFloat()) }
     }
-    val hot = androidx.compose.ui.graphics.lerp(color, Color(0xFFFFD27A), 0.35f)
     val hazePath = remember { Path() }
-    Canvas(modifier.fillMaxSize()) {
-        val w = size.width
-        val h = size.height
-        // A molten floor glow.
-        drawRect(
-            Brush.verticalGradient(
+    // Strength runs up to 1.5 but a draw alpha stops at 1, so the cached gradients carry the
+    // full superboost alpha and each draw scales them back down by strength / 1.5.
+    Spacer(
+        modifier.fillMaxSize().drawWithCache {
+            val color = tint
+            val hot = androidx.compose.ui.graphics.lerp(color, Color(0xFFFFD27A), 0.35f)
+            val floor = Brush.verticalGradient(
                 0f to Color.Transparent,
-                0.62f to color.copy(alpha = 0.10f * strength),
-                1f to hot.copy(alpha = 0.38f * strength),
-            ),
-        )
-        // Rising blobs: each loops from below the screen to about a third of the way up.
-        for ((x, speed, phase) in blobs) {
-            val p = ((t * speed + phase) % 1f)
-            val cy = h * (1.08f - 0.72f * p)
-            val cx = w * (x + 0.06f * sin((p * 4 + phase * 6) * PI.toFloat()))
-            val radius = w * (0.10f + 0.10f * (1f - p))
-            val fade = (1f - p) * strength
-            drawCircle(
-                Brush.radialGradient(
-                    listOf(hot.copy(alpha = 0.45f * fade), color.copy(alpha = 0.18f * fade), Color.Transparent),
-                    center = Offset(cx, cy),
-                    radius = radius,
-                ),
-                radius = radius,
-                center = Offset(cx, cy),
+                0.62f to color.copy(alpha = 0.10f * MAX_LEVEL),
+                1f to hot.copy(alpha = 0.38f * MAX_LEVEL),
             )
-        }
-        heatHaze(hazePath, t, color, strength)
-    }
+            // One blob gradient at the origin with the largest radius; each blob is moved and
+            // shrunk into place instead of getting a brush of its own every frame.
+            val blobR = size.width * 0.20f
+            val blob = Brush.radialGradient(
+                listOf(hot.copy(alpha = 0.45f * MAX_LEVEL), color.copy(alpha = 0.18f * MAX_LEVEL), Color.Transparent),
+                center = Offset.Zero,
+                radius = blobR,
+            )
+            val hazeStroke = Stroke(width = 10.dp.toPx())
+            val wobble = 7.dp.toPx()
+            onDrawBehind {
+                val w = size.width
+                val h = size.height
+                val s = strength
+                // A molten floor glow.
+                drawRect(floor, alpha = (s / MAX_LEVEL).coerceIn(0f, 1f))
+                // Rising blobs: each loops from below the screen to about a third of the way up.
+                for ((x, speed, phase) in blobs) {
+                    val p = ((t * speed + phase) % 1f)
+                    val cy = h * (1.08f - 0.72f * p)
+                    val cx = w * (x + 0.06f * sin((p * 4 + phase * 6) * PI.toFloat()))
+                    val radius = w * (0.10f + 0.10f * (1f - p))
+                    val fade = (1f - p) * s
+                    translate(cx, cy) {
+                        scale(radius / blobR, pivot = Offset.Zero) {
+                            drawCircle(blob, radius = blobR, center = Offset.Zero, alpha = (fade / MAX_LEVEL).coerceIn(0f, 1f))
+                        }
+                    }
+                }
+                heatHaze(hazePath, hazeStroke, wobble, t, color, s)
+            }
+        },
+    )
 }
 
+private const val MAX_LEVEL = 1.5f
+
 /** Thin wavy bands of light that wobble like air over a hot road. */
-private fun DrawScope.heatHaze(path: Path, t: Float, color: Color, strength: Float) {
+private fun DrawScope.heatHaze(path: Path, stroke: Stroke, wobble: Float, t: Float, color: Color, strength: Float) {
     val w = size.width
     val h = size.height
     val bands = 7
@@ -105,13 +134,13 @@ private fun DrawScope.heatHaze(path: Path, t: Float, color: Color, strength: Flo
         val steps = 24
         for (s in 0..steps) {
             val x = w * s / steps
-            val y = baseY + 7.dp.toPx() * sin((s / 3f + t * 2 * PI.toFloat() * (1 + i % 3) + i).toDouble()).toFloat()
+            val y = baseY + wobble * sin((s / 3f + t * 2 * PI.toFloat() * (1 + i % 3) + i).toDouble()).toFloat()
             if (s == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
         drawPath(
             path,
             color.copy(alpha = 0.05f * strength * (i + 1) / bands),
-            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 10.dp.toPx()),
+            style = stroke,
         )
     }
 }

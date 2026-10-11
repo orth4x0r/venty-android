@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import io.github.orth4x0r.venty.ble.DeviceSettings
 import io.github.orth4x0r.venty.ble.VentyProtocol
 import io.github.orth4x0r.venty.ble.VentyStatus
+import io.github.orth4x0r.venty.ui.enterFromBelow
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 import kotlin.math.roundToInt
 
@@ -111,8 +112,11 @@ fun SettingsScreen(
             Text("Settings", style = MaterialTheme.typography.titleLarge)
         }
 
-        SectionHeader("Temperature")
-        SettingsCard {
+        // Headers and cards rise in one after another; the cards are translucent so the
+        // ambient glow behind the app shows through.
+
+        SectionHeader("Temperature", Modifier.enterFromBelow(60))
+        SettingsCard(Modifier.enterFromBelow(95)) {
             SwitchRow(
                 icon = Icons.Rounded.Thermostat,
                 title = "Fahrenheit",
@@ -123,8 +127,8 @@ fun SettingsScreen(
             )
         }
 
-        SectionHeader("Display & feel")
-        SettingsCard {
+        SectionHeader("Display & feel", Modifier.enterFromBelow(130))
+        SettingsCard(Modifier.enterFromBelow(165)) {
             SliderRow(
                 icon = Icons.Rounded.LightMode,
                 title = "Brightness",
@@ -147,8 +151,8 @@ fun SettingsScreen(
             )
         }
 
-        SectionHeader("Boost")
-        SettingsCard {
+        SectionHeader("Boost", Modifier.enterFromBelow(200))
+        SettingsCard(Modifier.enterFromBelow(235)) {
             SwitchRow(
                 icon = Icons.Rounded.Bolt,
                 title = "Permanent boost",
@@ -168,8 +172,8 @@ fun SettingsScreen(
             )
         }
 
-        SectionHeader("Battery")
-        SettingsCard {
+        SectionHeader("Battery", Modifier.enterFromBelow(270))
+        SettingsCard(Modifier.enterFromBelow(305)) {
             SwitchRow(
                 icon = Icons.Rounded.BatteryChargingFull,
                 title = "Eco charging",
@@ -202,8 +206,8 @@ fun SettingsScreen(
             )
         }
 
-        SectionHeader("App")
-        SettingsCard {
+        SectionHeader("App", Modifier.enterFromBelow(340))
+        SettingsCard(Modifier.enterFromBelow(375)) {
             SwitchRow(
                 icon = Icons.Rounded.Palette,
                 title = "Wallpaper colors",
@@ -232,8 +236,8 @@ fun SettingsScreen(
             )
         }
 
-        SectionHeader("Device")
-        SettingsCard {
+        SectionHeader("Device", Modifier.enterFromBelow(410))
+        SettingsCard(Modifier.enterFromBelow(445)) {
             InfoRow("Name", deviceName ?: "Not connected")
             RowDivider()
             InfoRow("Firmware", firmware ?: "-")
@@ -246,23 +250,24 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SectionHeader(text: String) {
+private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
         text.uppercase(),
         style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.2.sp),
         color = VentyColors.Ember,
-        modifier = Modifier.padding(start = 8.dp, top = 24.dp, bottom = 8.dp),
+        modifier = modifier.padding(start = 8.dp, top = 24.dp, bottom = 8.dp),
     )
 }
 
 @Composable
-private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+private fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(24.dp)
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh, VentyColors.Surface)))
+            // Mostly opaque: lighter cards went muddy while the page crossfades with the dashboard.
+            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh.copy(alpha = 0.86f), VentyColors.Surface.copy(alpha = 0.86f))))
             .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)), shape),
         content = content,
     )
