@@ -52,17 +52,18 @@ class VentyApp : Application() {
             controller.status.collect { s ->
                 if (s != null) {
                     sessions.onStatus(s)
-                    battery.onStatus(s)
+                    // A Volcano reports a placeholder 100 %; keep it out of the battery history.
+                    if (controller.kind.value.hasBattery) battery.onStatus(s)
                 }
             }
         }
 
         // Re-render the home-screen widget only when something it shows changes.
         scope.launch {
-            combine(controller.status, controller.connection) { s, c ->
-                Triple(s?.copy(autoOffSeconds = 0), c is ConnectionState.Connected, Unit)
-            }.distinctUntilChanged().collect { (s, connected) ->
-                VentyWidget.update(this@VentyApp, s, connected)
+            combine(controller.status, controller.connection, controller.kind) { s, c, k ->
+                Triple(s?.copy(autoOffSeconds = 0), c is ConnectionState.Connected, k)
+            }.distinctUntilChanged().collect { (s, connected, kind) ->
+                VentyWidget.update(this@VentyApp, s, connected, kind)
             }
         }
     }

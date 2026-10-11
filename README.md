@@ -1,6 +1,6 @@
 # venty-android
 
-A native Android app for the Storz & Bickel Venty, for personal use. The official app is a Web Bluetooth page; this replaces it with a proper Kotlin + Jetpack Compose app.
+A native Android app for the Storz & Bickel Venty and Volcano Hybrid, for personal use. The official app is a Web Bluetooth page; this replaces it with a proper Kotlin + Jetpack Compose app.
 
 ## Status
 
@@ -17,6 +17,8 @@ To build locally: `./gradlew assembleDebug` (needs the Android SDK, e.g. from An
 - `ble/VentyProtocol.kt`: packet encoding and decoding, unit tested in `app/src/test`
 - `ble/GattLink.kt`: the BLE connection with a serial GATT operation queue
 - `ble/DemoLink.kt`: a simulated Venty speaking the same packets
+- `ble/VolcanoProtocol.kt`, `ble/VolcanoLink.kt`, `ble/GattVolcanoLink.kt`, `ble/DemoVolcanoLink.kt`: Volcano Hybrid support, translating the Venty's request packets into the Volcano's per-value characteristics
+- `ble/DeviceKind.kt`: what each device can do, which decides what the UI shows
 - `ble/VentyController.kt`: scanning, the 500 ms poll, reconnect with backoff, commands
 - `ui/`: Compose screens (connect, dashboard with the temperature dial)
 

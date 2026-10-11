@@ -23,7 +23,7 @@ When unsure, start one tier lower and escalate if the agent struggles.
 
 ## Project
 
-- Native Android app for the Storz & Bickel Venty, for personal use.
+- Native Android app for the Storz & Bickel Venty and Volcano Hybrid, for personal use. The Mighty+ has no Bluetooth, so it can't be supported.
 - Kotlin + Jetpack Compose (Material 3). Package `io.github.orth4x0r.venty`.
 - The BLE protocol is in [docs/PROTOCOL.md](docs/PROTOCOL.md). Read it before touching device code. It has not been verified on a real device yet, so treat anything marked unconfirmed as a guess.
 

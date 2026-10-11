@@ -41,6 +41,8 @@ object VentyColors {
     val Boost = Color(0xFFFF4D4D)
     val SuperBoost = Color(0xFFFF3D9A)
     val Warning = Color(0xFFFFC857)
+    /** The Volcano's pump: air streaming into the balloon. */
+    val Air = Color(0xFF5FE3E8)
 }
 
 private fun colors() = darkColorScheme(

@@ -53,9 +53,10 @@ object VentyProtocol {
     fun readFirmware(): ByteArray = packet(CMD_FIRMWARE)
     fun readUsage(): ByteArray = packet(CMD_USAGE)
 
-    fun setTarget(tenthsC: Int): ByteArray = packet(CMD_STATUS).also {
+    /** [max] is the Venty's ceiling unless a Volcano (which goes higher) is on the other end. */
+    fun setTarget(tenthsC: Int, max: Int = MAX_TARGET): ByteArray = packet(CMD_STATUS).also {
         it[1] = MASK_TARGET.toByte()
-        it.putU16(4, tenthsC.coerceIn(MIN_TARGET, MAX_TARGET))
+        it.putU16(4, tenthsC.coerceIn(MIN_TARGET, max))
     }
 
     fun setBoostOffset(degreesC: Int): ByteArray = packet(CMD_STATUS).also {
@@ -212,14 +213,12 @@ data class VentyStatus(
     val effectiveTargetTenths: Int
         get() = targetFor(heaterMode)
 
-    fun targetFor(mode: HeaterMode): Int = minOf(
-        VentyProtocol.MAX_TARGET,
-        targetTenths + when (mode) {
-            HeaterMode.Boost -> boostOffset * 10
-            HeaterMode.SuperBoost -> (boostOffset + superBoostOffset) * 10
-            else -> 0
-        },
-    )
+    fun targetFor(mode: HeaterMode): Int = when (mode) {
+        HeaterMode.Boost -> minOf(VentyProtocol.MAX_TARGET, targetTenths + boostOffset * 10)
+        HeaterMode.SuperBoost -> minOf(VentyProtocol.MAX_TARGET, targetTenths + (boostOffset + superBoostOffset) * 10)
+        // Unboosted, the setpoint stands as is: a Volcano's goes past the Venty's 210 °C.
+        else -> targetTenths
+    }
 }
 
 /** Display and feel settings from cmd `0x06`. */

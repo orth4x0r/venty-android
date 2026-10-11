@@ -125,6 +125,7 @@ fun VentyRoot(controller: VentyController) {
                 Screen.Permissions -> PermissionScreen(
                     onGrant = { permissionLauncher.launch(requiredPermissions) },
                     onDemo = controller::startDemo,
+                    onVolcanoDemo = controller::startVolcanoDemo,
                 )
                 Screen.Connect -> ConnectScreen(
                     connection = connection,
@@ -138,6 +139,7 @@ fun VentyRoot(controller: VentyController) {
                     onConnect = controller::connect,
                     onReconnectLast = { controller.connectToLast() },
                     onDemo = controller::startDemo,
+                    onVolcanoDemo = controller::startVolcanoDemo,
                 )
                 Screen.Dashboard -> DashboardScreen(
                     controller = controller,

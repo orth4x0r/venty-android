@@ -1,5 +1,6 @@
 package io.github.orth4x0r.venty.ui.connect
 
+import io.github.orth4x0r.venty.ble.DeviceKind
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -74,14 +75,14 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 @Composable
-fun PermissionScreen(onGrant: () -> Unit, onDemo: () -> Unit) {
+fun PermissionScreen(onGrant: () -> Unit, onDemo: () -> Unit, onVolcanoDemo: () -> Unit) {
     CenteredPage {
         HeroMark(animate = false)
         Spacer(Modifier.height(40.dp))
         Text("Venty", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
         Text(
-            "To find and talk to your Venty, the app needs permission to use Bluetooth nearby devices.",
+            "To find and talk to your Venty or Volcano, the app needs permission to use Bluetooth nearby devices.",
             style = MaterialTheme.typography.bodyLarge,
             color = VentyColors.Muted,
             textAlign = TextAlign.Center,
@@ -89,7 +90,7 @@ fun PermissionScreen(onGrant: () -> Unit, onDemo: () -> Unit) {
         Spacer(Modifier.height(32.dp))
         PrimaryButton("Allow Bluetooth", onGrant)
         Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onDemo) { Text("Try the demo instead", color = VentyColors.Muted) }
+        DemoButtons(onDemo, onVolcanoDemo, prefix = "Or try a demo")
     }
 }
 
@@ -104,6 +105,7 @@ fun ConnectScreen(
     onConnect: (FoundDevice) -> Unit,
     onReconnectLast: () -> Unit,
     onDemo: () -> Unit,
+    onVolcanoDemo: () -> Unit,
 ) {
     val scanning = connection as? ConnectionState.Scanning
     val searching = scanning?.active == true
@@ -114,14 +116,14 @@ fun ConnectScreen(
 
         when {
             !bluetoothOn -> {
-                Title("Bluetooth is off", "Turn it on to connect to your Venty.")
+                Title("Bluetooth is off", "Turn it on to connect to your Venty or Volcano.")
                 Spacer(Modifier.height(28.dp))
                 PrimaryButton("Turn on Bluetooth", onEnableBluetooth, icon = { Icon(Icons.Rounded.BluetoothDisabled, null) })
             }
 
             scanning != null -> {
                 Title(
-                    if (searching) "Looking for your Venty" else "Pick your Venty",
+                    if (searching) "Looking for your devices" else "Pick your device",
                     if (searching) "Switch it on and keep it close." else "Tap a device to connect.",
                 )
                 Spacer(Modifier.height(24.dp))
@@ -166,11 +168,11 @@ fun ConnectScreen(
             else -> {
                 val failed = connection as? ConnectionState.Failed
                 Title(
-                    if (failed != null) "Couldn't connect" else "Connect your Venty",
-                    failed?.message ?: "Switch on your Venty, then search for it.",
+                    if (failed != null) "Couldn't connect" else "Connect your device",
+                    failed?.message ?: "Switch on your Venty or Volcano Hybrid, then search for it.",
                 )
                 Spacer(Modifier.height(28.dp))
-                PrimaryButton("Search for Venty", onScan, icon = { Icon(Icons.Rounded.Bluetooth, null) })
+                PrimaryButton("Search for devices", onScan, icon = { Icon(Icons.Rounded.Bluetooth, null) })
                 if (lastDeviceName != null) {
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = onReconnectLast) { Text("Reconnect to $lastDeviceName") }
@@ -179,7 +181,16 @@ fun ConnectScreen(
         }
 
         Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onDemo) { Text("Try the demo", color = VentyColors.Muted) }
+        DemoButtons(onDemo, onVolcanoDemo, prefix = "Try a demo")
+    }
+}
+
+@Composable
+private fun DemoButtons(onDemo: () -> Unit, onVolcanoDemo: () -> Unit, prefix: String) {
+    Text(prefix, style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        TextButton(onClick = onDemo) { Text("Venty", color = VentyColors.Ember) }
+        TextButton(onClick = onVolcanoDemo) { Text("Volcano", color = VentyColors.Air) }
     }
 }
 
@@ -196,12 +207,16 @@ private fun DeviceRow(device: FoundDevice, onClick: () -> Unit, modifier: Modifi
             .padding(horizontal = 18.dp),
     ) {
         Box(
-            Modifier.size(10.dp).clip(CircleShape).background(VentyColors.Heat),
+            Modifier.size(10.dp).clip(CircleShape).background(if (device.kind == DeviceKind.Volcano) VentyColors.Air else VentyColors.Heat),
         )
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(device.name, style = MaterialTheme.typography.titleMedium)
-            Text(device.address, style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
+            Text(
+                (if (device.kind == DeviceKind.Volcano) "Volcano Hybrid · " else "Venty · ") + device.address,
+                style = MaterialTheme.typography.bodySmall,
+                color = VentyColors.Muted,
+            )
         }
         SignalBars(device.rssi, Modifier.size(width = 20.dp, height = 16.dp))
         Spacer(Modifier.width(8.dp))
@@ -290,7 +305,7 @@ private fun CenteredPage(content: @Composable () -> Unit) {
 
 /**
  * The app's mark: a heat arc that sweeps round while searching, with radar rings rippling out
- * and each Venty found popping up as a blip, nearer the middle the stronger its signal.
+ * and each device found popping up as a blip, nearer the middle the stronger its signal.
  */
 @Composable
 private fun HeroMark(animate: Boolean, found: List<FoundDevice> = emptyList()) {

@@ -1,5 +1,7 @@
 package io.github.orth4x0r.venty.ui.settings
 
+import io.github.orth4x0r.venty.ble.DeviceKind
+import io.github.orth4x0r.venty.ble.VolcanoProtocol
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -73,6 +75,7 @@ data class AppPrefs(
 
 @Composable
 fun SettingsScreen(
+    kind: DeviceKind,
     status: VentyStatus?,
     deviceSettings: DeviceSettings?,
     firmware: String?,
@@ -132,12 +135,12 @@ fun SettingsScreen(
             SliderRow(
                 icon = Icons.Rounded.LightMode,
                 title = "Brightness",
-                valueLabel = deviceSettings?.brightness?.toString() ?: "-",
+                valueLabel = deviceSettings?.brightness?.let { brightnessLabel(kind, it) } ?: "-",
                 value = (deviceSettings?.brightness ?: VentyProtocol.MIN_BRIGHTNESS).toFloat(),
                 range = VentyProtocol.MIN_BRIGHTNESS.toFloat()..VentyProtocol.MAX_BRIGHTNESS.toFloat(),
                 steps = VentyProtocol.MAX_BRIGHTNESS - VentyProtocol.MIN_BRIGHTNESS - 1,
                 enabled = hasSettings,
-                labelFor = { it.roundToInt().toString() },
+                labelFor = { brightnessLabel(kind, it.roundToInt()) },
                 onCommit = { onBrightness(it.roundToInt()) },
             )
             RowDivider()
@@ -151,59 +154,64 @@ fun SettingsScreen(
             )
         }
 
-        SectionHeader("Boost", Modifier.enterFromBelow(200))
-        SettingsCard(Modifier.enterFromBelow(235)) {
-            SwitchRow(
-                icon = Icons.Rounded.Bolt,
-                title = "Permanent boost",
-                subtitle = "Boost and superboost stay on instead of ending after about 90 s",
-                checked = deviceSettings?.boostTimeoutDisabled == true,
-                enabled = hasSettings,
-                onChange = onBoostTimeoutDisabled,
-            )
-            RowDivider()
-            SwitchRow(
-                icon = Icons.Rounded.LightMode,
-                title = "Boost LED visualization",
-                subtitle = "Show boost and superboost on the device LEDs",
-                checked = status?.boostVisualization == true,
-                enabled = hasStatus,
-                onChange = onBoostVisualization,
-            )
+        // The Volcano has no boost or battery, so it skips straight to the app settings.
+        if (kind.hasBoost) {
+            SectionHeader("Boost", Modifier.enterFromBelow(200))
+            SettingsCard(Modifier.enterFromBelow(235)) {
+                SwitchRow(
+                    icon = Icons.Rounded.Bolt,
+                    title = "Permanent boost",
+                    subtitle = "Boost and superboost stay on instead of ending after about 90 s",
+                    checked = deviceSettings?.boostTimeoutDisabled == true,
+                    enabled = hasSettings,
+                    onChange = onBoostTimeoutDisabled,
+                )
+                RowDivider()
+                SwitchRow(
+                    icon = Icons.Rounded.LightMode,
+                    title = "Boost LED visualization",
+                    subtitle = "Show boost and superboost on the device LEDs",
+                    checked = status?.boostVisualization == true,
+                    enabled = hasStatus,
+                    onChange = onBoostVisualization,
+                )
+            }
         }
 
-        SectionHeader("Battery", Modifier.enterFromBelow(270))
-        SettingsCard(Modifier.enterFromBelow(305)) {
-            SwitchRow(
-                icon = Icons.Rounded.BatteryChargingFull,
-                title = "Eco charging",
-                subtitle = "Charge optimization: slower, gentler charging",
-                checked = status?.ecoChargeOptimization == true,
-                enabled = hasStatus,
-                onChange = onEcoCharge,
-            )
-            RowDivider()
-            SwitchRow(
-                icon = Icons.Rounded.BatteryChargingFull,
-                title = "Eco voltage limit",
-                subtitle = "Stops charging at about 90 %",
-                checked = status?.ecoVoltageLimit == true,
-                enabled = hasStatus,
-                onChange = onEcoVoltage,
-            )
-            RowDivider()
-            SliderRow(
-                icon = Icons.Rounded.NotificationsActive,
-                title = "Low battery alert",
-                subtitle = "Notify me when the battery drops to this level",
-                valueLabel = if (appPrefs.lowBatteryAlertPercent <= 0) "Off" else "${appPrefs.lowBatteryAlertPercent} %",
-                value = appPrefs.lowBatteryAlertPercent.toFloat(),
-                range = 0f..50f,
-                steps = 9,
-                enabled = true,
-                labelFor = { if (it.roundToInt() <= 0) "Off" else "${it.roundToInt()} %" },
-                onCommit = { onAppPrefs(appPrefs.copy(lowBatteryAlertPercent = it.roundToInt())) },
-            )
+        if (kind.hasBattery) {
+            SectionHeader("Battery", Modifier.enterFromBelow(270))
+            SettingsCard(Modifier.enterFromBelow(305)) {
+                SwitchRow(
+                    icon = Icons.Rounded.BatteryChargingFull,
+                    title = "Eco charging",
+                    subtitle = "Charge optimization: slower, gentler charging",
+                    checked = status?.ecoChargeOptimization == true,
+                    enabled = hasStatus,
+                    onChange = onEcoCharge,
+                )
+                RowDivider()
+                SwitchRow(
+                    icon = Icons.Rounded.BatteryChargingFull,
+                    title = "Eco voltage limit",
+                    subtitle = "Stops charging at about 90 %",
+                    checked = status?.ecoVoltageLimit == true,
+                    enabled = hasStatus,
+                    onChange = onEcoVoltage,
+                )
+                RowDivider()
+                SliderRow(
+                    icon = Icons.Rounded.NotificationsActive,
+                    title = "Low battery alert",
+                    subtitle = "Notify me when the battery drops to this level",
+                    valueLabel = if (appPrefs.lowBatteryAlertPercent <= 0) "Off" else "${appPrefs.lowBatteryAlertPercent} %",
+                    value = appPrefs.lowBatteryAlertPercent.toFloat(),
+                    range = 0f..50f,
+                    steps = 9,
+                    enabled = true,
+                    labelFor = { if (it.roundToInt() <= 0) "Off" else "${it.roundToInt()} %" },
+                    onCommit = { onAppPrefs(appPrefs.copy(lowBatteryAlertPercent = it.roundToInt())) },
+                )
+            }
         }
 
         SectionHeader("App", Modifier.enterFromBelow(340))
@@ -241,13 +249,19 @@ fun SettingsScreen(
             InfoRow("Name", deviceName ?: "Not connected")
             RowDivider()
             InfoRow("Firmware", firmware ?: "-")
-            RowDivider()
-            FindMyButton(enabled = hasStatus, onClick = onFindMy)
+            if (kind.hasVentyExtras) {
+                RowDivider()
+                FindMyButton(enabled = hasStatus, onClick = onFindMy)
+            }
         }
 
         Spacer(Modifier.height(32.dp))
     }
 }
+
+/** The Venty shows brightness 1-9; the Volcano's is a percentage, so show what it will get. */
+private fun brightnessLabel(kind: DeviceKind, level: Int): String =
+    if (kind == DeviceKind.Volcano) "${VolcanoProtocol.levelToBrightness(level)} %" else level.toString()
 
 @Composable
 private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
