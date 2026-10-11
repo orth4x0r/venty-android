@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-label="venty-android: a native Android app for the Storz &amp; Bickel Venty and Volcano Hybrid">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1A1310"/>
+      <stop offset="1" stop-color="#0B0908"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FF7A3D" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#FF7A3D" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#FF7A3D" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5FE3E8" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#5FE3E8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="heat" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFB27A"/>
+      <stop offset="0.5" stop-color="#FF7A3D"/>
+      <stop offset="1" stop-color="#FF3D6A"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFF4EC"/>
+      <stop offset="0.55" stop-color="#FFD2B0"/>
+      <stop offset="1" stop-color="#FF8A4D"/>
+    </linearGradient>
+    <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2"/></filter>
+  </defs>
+
+  <rect width="1280" height="420" rx="28" fill="url(#bg)"/>
+  <ellipse cx="1180" cy="40" rx="320" ry="220" fill="url(#glow2)"/>
+  <circle cx="250" cy="210" r="260" fill="url(#glow)">
+    <animate attributeName="r" values="240;275;240" dur="4s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- embers -->
+  <g fill="#FFB27A">
+    <circle cx="200" cy="330" r="3"><animate attributeName="cy" values="340;60" dur="5s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;0" dur="5s" repeatCount="indefinite"/></circle>
+    <circle cx="300" cy="330" r="2"><animate attributeName="cy" values="350;80" dur="4s" begin="1s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;0" dur="4s" begin="1s" repeatCount="indefinite"/></circle>
+    <circle cx="250" cy="330" r="2.5" fill="#FF7A3D"><animate attributeName="cy" values="360;40" dur="6s" begin="2s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;0" dur="6s" begin="2s" repeatCount="indefinite"/></circle>
+    <circle cx="160" cy="330" r="1.8"><animate attributeName="cy" values="330;90" dur="4.5s" begin="0.5s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;0.9;0" dur="4.5s" begin="0.5s" repeatCount="indefinite"/></circle>
+    <circle cx="345" cy="330" r="2.2" fill="#FF3D6A"><animate attributeName="cy" values="345;70" dur="5.5s" begin="3s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;0" dur="5.5s" begin="3s" repeatCount="indefinite"/></circle>
+  </g>
+
+  <!-- dial, the app icon drawn big: 270 degree arc, radius 110, centre 250,210 -->
+  <g transform="translate(250 210)">
+    <circle r="138" fill="none" stroke="#FF7A3D" stroke-opacity="0.18" stroke-width="2" stroke-dasharray="3 14">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="24s" repeatCount="indefinite"/>
+    </circle>
+    <path d="M-77.78,77.78 A110,110 0 1,1 77.78,77.78" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="26" stroke-linecap="round"/>
+    <path d="M-77.78,77.78 A110,110 0 1,1 95.26,-55" fill="none" stroke="url(#heat)" stroke-width="26" stroke-linecap="round" filter="url(#blur)" opacity="0.8"/>
+    <path d="M-77.78,77.78 A110,110 0 1,1 95.26,-55" fill="none" stroke="url(#heat)" stroke-width="26" stroke-linecap="round"/>
+    <circle cx="95.26" cy="-55" r="16" fill="#FFF1E6" filter="url(#soft)">
+      <animate attributeName="opacity" values="0.6;1;0.6" dur="1.6s" repeatCount="indefinite"/>
+    </circle>
+    <path d="M0,-58 C20,-28 35,-8 35,14 A35,35 0 0,1 -35,14 C-35,-8 -20,-28 0,-58 Z" fill="#FFB27A"/>
+    <path d="M0,-30 C10,-14 17,-3 17,9 A17,17 0 0,1 -17,9 C-17,-3 -10,-14 0,-30 Z" fill="#FFF1E6" opacity="0.85"/>
+  </g>
+
+  <!-- text -->
+  <g font-family="'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+    <text x="470" y="178" font-size="88" font-weight="700" letter-spacing="-3" fill="url(#title)">venty-android</text>
+    <text x="474" y="230" font-size="27" fill="#E8D9CE">A native Android app for the Storz &amp; Bickel</text>
+    <text x="474" y="266" font-size="27" fill="#E8D9CE"><tspan fill="#FFB27A" font-weight="600">Venty</tspan> and <tspan fill="#5FE3E8" font-weight="600">Volcano Hybrid</tspan>. No browser required.</text>
+    <g font-size="17" font-weight="600" letter-spacing="0.4">
+      <rect x="474" y="304" width="96" height="36" rx="18" fill="#FF7A3D" fill-opacity="0.14" stroke="#FF7A3D" stroke-opacity="0.5"/>
+      <text x="522" y="328" text-anchor="middle" fill="#FFB27A">Kotlin</text>
+      <rect x="582" y="304" width="170" height="36" rx="18" fill="#FF7A3D" fill-opacity="0.14" stroke="#FF7A3D" stroke-opacity="0.5"/>
+      <text x="667" y="328" text-anchor="middle" fill="#FFB27A">Jetpack Compose</text>
+      <rect x="764" y="304" width="132" height="36" rx="18" fill="#FF7A3D" fill-opacity="0.14" stroke="#FF7A3D" stroke-opacity="0.5"/>
+      <text x="830" y="328" text-anchor="middle" fill="#FFB27A">Material 3</text>
+      <rect x="908" y="304" width="170" height="36" rx="18" fill="#5FE3E8" fill-opacity="0.1" stroke="#5FE3E8" stroke-opacity="0.45"/>
+      <text x="993" y="328" text-anchor="middle" fill="#5FE3E8">Bluetooth LE</text>
+    </g>
+  </g>
+</svg>
