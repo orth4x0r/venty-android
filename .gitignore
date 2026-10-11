@@ -11,3 +11,8 @@
 *.aab
 *.keystore
 *.jks
+
+# Gradle
+local.properties
+.kotlin/
+build/
