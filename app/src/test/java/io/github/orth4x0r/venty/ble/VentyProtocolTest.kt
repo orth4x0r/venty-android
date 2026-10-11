@@ -39,7 +39,7 @@ class VentyProtocolTest {
     fun `parses a status packet`() {
         val packet = padded(
             0x01, 0x00,
-            0x2E, 0x07, // current 184.6
+            0x36, 0x07, // current 184.6
             0x3A, 0x07, // target 185.0
             15, 10,     // boost, superboost
             76,         // battery
