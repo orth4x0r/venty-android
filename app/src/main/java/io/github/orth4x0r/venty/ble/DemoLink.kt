@@ -18,7 +18,8 @@ import kotlin.math.min
 
 /**
  * A simulated Venty that speaks the real packet format, so the whole app can be exercised
- * without hardware. It heats at roughly the real device's pace and runs the auto-off timer.
+ * without hardware. It heats at roughly the real device's pace, sets "setpoint reached" when
+ * there, and runs the auto-off timer.
  */
 class DemoLink : VentyLink {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -101,7 +102,8 @@ class DemoLink : VentyLink {
         val battery = if (heating && heatTicks % 300 == 0) max(0, state.battery - 1) else state.battery
 
         state = state.copy(
-            currentTenths = if (heating || tempTenths > 400) tempTenths.toInt() else null,
+            // Like the real Venty, report no live temperature; only "setpoint reached".
+            currentTenths = null,
             setpointReached = reached,
             autoOffSeconds = if (heating) autoOffTicks / TICKS_PER_SECOND else 0,
             battery = battery,

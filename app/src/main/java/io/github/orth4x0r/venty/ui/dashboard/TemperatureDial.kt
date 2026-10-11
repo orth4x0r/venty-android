@@ -45,7 +45,8 @@ private fun fraction(tenthsC: Int?): Float {
 }
 
 /**
- * The big round gauge: a 270° track, an arc for the current temperature and a marker for the
+ * The big round gauge: a 270° track, an arc for the current temperature (or, when the device
+ * gives none, the temperature it is heading for, drawn dim until reached) and a marker for the
  * effective target. [accent] tints the arc for the heater state.
  */
 @Composable
@@ -54,6 +55,7 @@ fun TemperatureDial(
     targetTenths: Int,
     accent: Color,
     pulsing: Boolean,
+    dimArc: Boolean = false,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -71,6 +73,7 @@ fun TemperatureDial(
         label = "pulse",
     )
     val glowAlpha = if (pulsing) pulse else 0.12f
+    val arcAlpha by animateFloatAsState(if (dimArc) 0.45f else 1f, tween(600), label = "arcAlpha")
 
     Box(modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
@@ -109,9 +112,9 @@ fun TemperatureDial(
                 rotate(START_ANGLE) {
                     drawArc(
                         brush = Brush.sweepGradient(
-                            0f to color.copy(alpha = 0.35f),
-                            (SWEEP / 360f) * current to color,
-                            1f to color,
+                            0f to color.copy(alpha = 0.35f * arcAlpha),
+                            (SWEEP / 360f) * current to color.copy(alpha = arcAlpha),
+                            1f to color.copy(alpha = arcAlpha),
                         ),
                         startAngle = 0f,
                         sweepAngle = SWEEP * current,

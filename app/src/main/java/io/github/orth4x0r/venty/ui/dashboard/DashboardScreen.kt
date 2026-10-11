@@ -136,18 +136,32 @@ private fun Dashboard(
     val phase = HeaterPhase.of(s)
 
     Spacer(Modifier.height(8.dp))
+    // The Venty may never report a live temperature (bytes 2-3 stay 0x8000), so when it doesn't,
+    // the dial shows where the heater is aiming and the pill says whether it has got there.
+    val current = s.currentTenths
+    val heating = s.heaterMode.isHeating
     TemperatureDial(
-        currentTenths = s.currentTenths,
+        currentTenths = current ?: s.effectiveTargetTenths.takeIf { heating },
         targetTenths = s.effectiveTargetTenths,
         accent = phase.color,
         pulsing = phase == HeaterPhase.Heating,
+        dimArc = current == null && !s.setpointReached,
         modifier = Modifier.padding(horizontal = 4.dp),
     ) {
-        val current = s.currentTenths
+        Text(
+            when {
+                current != null -> "Now"
+                !heating -> "Target"
+                s.setpointReached -> "Ready at"
+                else -> "Heating to"
+            },
+            style = MaterialTheme.typography.labelLarge,
+            color = VentyColors.Muted,
+        )
         BigTemperature(
-            value = current?.let { Temperature.toDisplay(it, f).toString() } ?: "––",
+            value = Temperature.toDisplay(current ?: s.effectiveTargetTenths, f).toString(),
             unit = unit,
-            color = if (current == null) VentyColors.Muted else MaterialTheme.colorScheme.onBackground,
+            color = if (current == null && !heating) VentyColors.Muted else MaterialTheme.colorScheme.onBackground,
         )
         StatusPill(phase, s)
         if (s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
