@@ -303,7 +303,15 @@ class VentyController(context: Context) {
                 throw LinkLostException("${_kind.value.displayName} stopped answering")
             }
             tick++
-            l.send(if (tick % USAGE_EVERY_TICKS == 0) VentyProtocol.readUsage() else VentyProtocol.pollStatus())
+            val poll = if (tick % USAGE_EVERY_TICKS == 0) VentyProtocol.readUsage() else VentyProtocol.pollStatus()
+            try {
+                l.send(poll)
+            } catch (e: LinkLostException) {
+                // One failed or slow write (Android's GATT queue is often briefly busy) used to end the
+                // link, and each reconnect makes the Venty buzz. A real disconnect fails `incoming`,
+                // which ends this scope; otherwise the stale check above decides.
+                Log.w(TAG, "poll write failed, keeping the link: ${e.message}")
+            }
         }
     }
 
