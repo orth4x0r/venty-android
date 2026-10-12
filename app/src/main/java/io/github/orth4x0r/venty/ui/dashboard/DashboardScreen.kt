@@ -174,6 +174,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     val status by controller.status.collectAsStateWithLifecycle()
     val info by controller.info.collectAsStateWithLifecycle()
     val deviceSettings by controller.deviceSettings.collectAsStateWithLifecycle()
+    val linkEvents by controller.linkEvents.collectAsStateWithLifecycle()
     val prefs by app.prefs.app.collectAsStateWithLifecycle()
     val presets by app.prefs.presets.collectAsStateWithLifecycle()
     val live by app.sessions.live.collectAsStateWithLifecycle()
@@ -328,6 +329,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             firmware = info.firmware,
                             deviceName = name,
                             appPrefs = prefs,
+                            linkEvents = linkEvents,
                             onFahrenheit = controller::setFahrenheit,
                             onEcoCharge = controller::setEcoCharge,
                             onEcoVoltage = controller::setEcoVoltage,

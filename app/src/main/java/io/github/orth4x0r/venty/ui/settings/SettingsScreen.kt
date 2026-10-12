@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.orth4x0r.venty.ble.DeviceSettings
+import io.github.orth4x0r.venty.ble.LinkEvent
 import io.github.orth4x0r.venty.ble.VentyProtocol
 import io.github.orth4x0r.venty.ble.VentyStatus
 import io.github.orth4x0r.venty.ui.enterFromBelow
@@ -81,6 +82,7 @@ fun SettingsScreen(
     firmware: String?,
     deviceName: String?,
     appPrefs: AppPrefs,
+    linkEvents: List<LinkEvent> = emptyList(),
     onFahrenheit: (Boolean) -> Unit,
     onEcoCharge: (Boolean) -> Unit,
     onEcoVoltage: (Boolean) -> Unit,
@@ -252,6 +254,22 @@ fun SettingsScreen(
             if (kind.hasVentyExtras) {
                 RowDivider()
                 FindMyButton(enabled = hasStatus, onClick = onFindMy)
+            }
+        }
+
+        if (linkEvents.isNotEmpty()) {
+            SectionHeader("Connection log", Modifier.enterFromBelow(480))
+            SettingsCard(Modifier.enterFromBelow(515)) {
+                val drops = linkEvents.count { it.text.startsWith("Dropped") }
+                InfoRow("Drops this session", "$drops")
+                val time = remember { java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss") }
+                linkEvents.take(8).forEach { e ->
+                    RowDivider()
+                    InfoRow(
+                        java.time.Instant.ofEpochMilli(e.atMs).atZone(java.time.ZoneId.systemDefault()).format(time),
+                        e.text,
+                    )
+                }
             }
         }
 
@@ -444,7 +462,13 @@ private fun InfoRow(label: String, value: String) {
             .padding(horizontal = 20.dp, vertical = 16.dp),
     ) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
-        Text(value, style = MaterialTheme.typography.bodyLarge, color = VentyColors.Muted)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyLarge,
+            color = VentyColors.Muted,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1f, fill = false).padding(start = 16.dp),
+        )
     }
 }
 

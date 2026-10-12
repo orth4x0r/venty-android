@@ -29,7 +29,10 @@ import kotlinx.coroutines.launch
 private const val TAG = "VentyController"
 private const val POLL_INTERVAL_MS = 500L
 private const val USAGE_EVERY_TICKS = 31
-private const val STALE_AFTER_MS = 2_500L
+// Generous on purpose: every reconnect makes the Venty buzz, so a few late answers (a busy radio,
+// the phone dozing) shouldn't tear the link down.
+private const val STALE_AFTER_MS = 8_000L
+private const val MAX_LINK_EVENTS = 30
 private const val SCAN_TIMEOUT_MS = 20_000L
 private const val WRITE_DEBOUNCE_MS = 250L
 // How long an optimistic value is shown before the device's own report wins. Two polls is enough
@@ -68,6 +71,15 @@ class VentyController(context: Context) {
 
     private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+
+    /** Recent connects and drops, newest first, so periodic reconnects can be spotted in Settings. */
+    private val _linkEvents = MutableStateFlow<List<LinkEvent>>(emptyList())
+    val linkEvents: StateFlow<List<LinkEvent>> = _linkEvents.asStateFlow()
+
+    private fun logLink(text: String) {
+        Log.i(TAG, "link: $text")
+        _linkEvents.update { (listOf(LinkEvent(System.currentTimeMillis(), text)) + it).take(MAX_LINK_EVENTS) }
+    }
 
     /** Latest device status with any not-yet-confirmed user changes applied on top. */
     private val _status = MutableStateFlow<VentyStatus?>(null)
@@ -248,6 +260,7 @@ class VentyController(context: Context) {
                 } catch (e: Exception) {
                     Log.w(TAG, "link error", e)
                     lastError = e.message
+                    logLink("Dropped: ${e.message ?: e.javaClass.simpleName}")
                 } finally {
                     link = null
                 }
@@ -282,6 +295,7 @@ class VentyController(context: Context) {
             delay(POLL_INTERVAL_MS)
             if (!announced && deviceStatus != null) {
                 announced = true
+                logLink("Connected")
                 onUp()
                 _connection.value = ConnectionState.Connected(name, demo)
             }
@@ -289,7 +303,15 @@ class VentyController(context: Context) {
                 throw LinkLostException("${_kind.value.displayName} stopped answering")
             }
             tick++
-            l.send(if (tick % USAGE_EVERY_TICKS == 0) VentyProtocol.readUsage() else VentyProtocol.pollStatus())
+            val poll = if (tick % USAGE_EVERY_TICKS == 0) VentyProtocol.readUsage() else VentyProtocol.pollStatus()
+            try {
+                l.send(poll)
+            } catch (e: LinkLostException) {
+                // One failed or slow write (Android's GATT queue is often briefly busy) used to end the
+                // link, and each reconnect makes the Venty buzz. A real disconnect fails `incoming`,
+                // which ends this scope; otherwise the stale check above decides.
+                Log.w(TAG, "poll write failed, keeping the link: ${e.message}")
+            }
         }
     }
 
@@ -529,3 +551,5 @@ class VentyController(context: Context) {
         const val KEY_KIND = "kind"
     }
 }
+
+data class LinkEvent(val atMs: Long, val text: String)
