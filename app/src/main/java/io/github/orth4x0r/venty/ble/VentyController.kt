@@ -29,9 +29,12 @@ import kotlinx.coroutines.launch
 private const val TAG = "VentyController"
 private const val POLL_INTERVAL_MS = 500L
 private const val USAGE_EVERY_TICKS = 31
-// Generous on purpose: every reconnect makes the Venty buzz, so a few late answers (a busy radio,
-// the phone dozing) shouldn't tear the link down.
-private const val STALE_AFTER_MS = 8_000L
+// Generous on purpose: every reconnect makes the Venty buzz, and the official app never drops a
+// link on its own. Android reports a real disconnect itself (supervision timeout), so this is only
+// a backstop for a link that is up but has gone silent and couldn't be revived.
+private const val STALE_AFTER_MS = 30_000L
+/** After this much silence, try re-subscribing to notifications, then again every interval. */
+private const val NUDGE_AFTER_MS = 5_000L
 private const val MAX_LINK_EVENTS = 30
 private const val SCAN_TIMEOUT_MS = 20_000L
 private const val WRITE_DEBOUNCE_MS = 250L
@@ -291,6 +294,7 @@ class VentyController(context: Context) {
 
         var tick = 0
         var announced = false
+        var lastNudgeAt = 0L
         while (true) {
             delay(POLL_INTERVAL_MS)
             if (!announced && deviceStatus != null) {
@@ -299,7 +303,17 @@ class VentyController(context: Context) {
                 onUp()
                 _connection.value = ConnectionState.Connected(name, demo)
             }
-            if (SystemClock.elapsedRealtime() - lastStatusAt > STALE_AFTER_MS) {
+            val silentMs = SystemClock.elapsedRealtime() - lastStatusAt
+            if (silentMs > NUDGE_AFTER_MS && SystemClock.elapsedRealtime() - lastNudgeAt > NUDGE_AFTER_MS) {
+                lastNudgeAt = SystemClock.elapsedRealtime()
+                logLink("No answer for ${silentMs / 1000} s, re-subscribing")
+                try {
+                    l.nudge()
+                } catch (e: LinkLostException) {
+                    Log.w(TAG, "nudge failed: ${e.message}")
+                }
+            }
+            if (silentMs > STALE_AFTER_MS) {
                 throw LinkLostException("${_kind.value.displayName} stopped answering")
             }
             tick++
@@ -543,7 +557,9 @@ class VentyController(context: Context) {
         }
     }
 
-    private fun backoffMs(attempt: Int): Long = minOf(1_000L shl minOf(attempt - 1, 4), 15_000L)
+    // Starts at 2 s: reconnecting sooner, before Android has finished closing the old link, tends to
+    // fail with status 22 or an empty service list.
+    private fun backoffMs(attempt: Int): Long = minOf(2_000L shl minOf(attempt - 1, 3), 15_000L)
 
     private companion object {
         const val KEY_ADDRESS = "address"

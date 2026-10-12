@@ -9,6 +9,9 @@ interface VentyLink : AutoCloseable {
 
     /** Sends one request packet. Safe to call from several coroutines; sends are serialised. */
     suspend fun send(packet: ByteArray)
+
+    /** Tries to revive a link that is up but silent, e.g. by re-subscribing to notifications. */
+    suspend fun nudge() {}
 }
 
 class LinkLostException(message: String) : Exception(message)
