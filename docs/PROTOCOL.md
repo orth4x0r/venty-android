@@ -177,6 +177,8 @@ Boost timeout off    06 10 00 00 00 00 01
 
 Re-read with a bare `0x06` after writing; the device answers with the new values.
 
+Vibration is on/off only: the official app (checked 2026-10-13) writes byte 5 as 0 or 1 and reads it as zero / non-zero, with a single toggle in its UI and no strength setting. Masks `0x02` and `0x04` (bytes 3–4) are never used by the official app. It only offers the boost-timeout toggle on a Venty whose firmware byte 2 is 8 or higher.
+
 ### 5.6 `0x0D` find my device
 
 reactive-volcano-app notes this may not work on the Venty (**unverified**).
