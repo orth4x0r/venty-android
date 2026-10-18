@@ -21,7 +21,13 @@ data class SessionRecord(
     val heatUpSeconds: Int?,
     val maxTargetTenths: Int,
     val boosted: Boolean,
-)
+    /** Time-weighted average target in tenths of °C; 0 for sessions saved before this was tracked. */
+    val avgTargetTenths: Int = 0,
+    val longestDrawMs: Long = 0L,
+    val totalDrawMs: Long = 0L,
+) {
+    val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
+}
 
 data class LiveSession(
     val startMs: Long,
@@ -30,6 +36,8 @@ data class LiveSession(
     val etaSeconds: Int?,
     val puffing: Boolean,
     val lastPuffMs: Long?,
+    /** When the puff in progress started, from the detector's event; null when not puffing. */
+    val puffStartMs: Long? = null,
 )
 
 private const val DEFAULT_SECONDS_PER_DEGREE = 0.25
@@ -95,6 +103,8 @@ class SessionTracker(context: Context) {
     private var boosted = false
     private var puffing = false
     private var lastPuffMs: Long? = null
+    private var puffStartMs = 0L
+    private var stats = SessionStatsAccumulator(0L)
     private var rates: List<Double> = emptyList()
     private var seenAny = false
     private var version = 0L
@@ -128,10 +138,13 @@ class SessionTracker(context: Context) {
                 boosted = false
                 puffing = false
                 lastPuffMs = null
+                puffStartMs = 0L
+                stats = SessionStatsAccumulator(nowMs)
                 detector.reset()
             }
             seenAny = true
             maxTarget = maxOf(maxTarget, s.effectiveTargetTenths)
+            stats.onTarget(s.effectiveTargetTenths, nowMs)
             if (s.heaterMode == HeaterMode.Boost || s.heaterMode == HeaterMode.SuperBoost) boosted = true
             if (s.setpointReached && !reached) {
                 reached = true
@@ -142,17 +155,22 @@ class SessionTracker(context: Context) {
                     puffs++
                     puffing = true
                     lastPuffMs = e.atMs
+                    puffStartMs = e.atMs
+                    stats.onPuffStarted(e.atMs)
                     _lifetimePuffs.value = _lifetimePuffs.value + 1
                     save = true
                 }
-                is PuffEvent.Ended -> puffing = false
+                is PuffEvent.Ended -> {
+                    puffing = false
+                    stats.onPuffEnded(e.durationMs)
+                }
                 null -> {}
             }
             // A resumed puff is merged without an event, so ask the detector directly.
             puffing = detector.puffing
             val elapsed = ((nowMs - startMs) / 1000L).toInt()
             val eta = if (reached) null else estimateEta(s.effectiveTargetTenths, elapsed, rates)
-            _live.value = LiveSession(startMs, puffs, heatUpSeconds, eta, puffing, lastPuffMs)
+            _live.value = LiveSession(startMs, puffs, heatUpSeconds, eta, puffing, lastPuffMs, puffStartMs.takeIf { puffing })
         }
         if (save) save()
     }
@@ -184,8 +202,12 @@ class SessionTracker(context: Context) {
         active = false
         puffing = false
         _live.value = null
+        stats.finish(nowMs)
         if (nowMs - startMs >= MIN_SESSION_MS) {
-            val record = SessionRecord(startMs, nowMs, puffs, heatUpSeconds, maxTarget, boosted)
+            val record = SessionRecord(
+                startMs, nowMs, puffs, heatUpSeconds, maxTarget, boosted,
+                stats.avgTargetTenths(), stats.longestDrawMs, stats.totalDrawMs,
+            )
             _history.value = (listOf(record) + _history.value).take(MAX_HISTORY)
             rates = _history.value.mapNotNull { heatUpRate(it) }
         }
@@ -211,7 +233,10 @@ class SessionTracker(context: Context) {
                             .put("puffs", r.puffs)
                             .put("heatUp", r.heatUpSeconds ?: JSONObject.NULL)
                             .put("maxTarget", r.maxTargetTenths)
-                            .put("boosted", r.boosted),
+                            .put("boosted", r.boosted)
+                            .put("avgTarget", r.avgTargetTenths)
+                            .put("longestDraw", r.longestDrawMs)
+                            .put("totalDraw", r.totalDrawMs),
                     )
                 }
                 val json = JSONObject().put("lifetimePuffs", lifetime).put("sessions", arr).toString()
@@ -246,6 +271,9 @@ class SessionTracker(context: Context) {
                     heatUpSeconds = if (o.isNull("heatUp")) null else o.getInt("heatUp"),
                     maxTargetTenths = o.getInt("maxTarget"),
                     boosted = o.optBoolean("boosted", false),
+                    avgTargetTenths = o.optInt("avgTarget", 0),
+                    longestDrawMs = o.optLong("longestDraw", 0L),
+                    totalDrawMs = o.optLong("totalDraw", 0L),
                 )
             }
             val sorted = list.sortedByDescending { it.startMs }.take(MAX_HISTORY)

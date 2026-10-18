@@ -108,6 +108,8 @@ class PrefsStore(context: Context) {
             .putBoolean("keep_screen_on", prefs.keepScreenOn)
             .putBoolean("ready_notification", prefs.readyNotification)
             .putInt("low_battery", prefs.lowBatteryAlertPercent)
+            .putInt("puff_target_s", prefs.puffTargetSeconds)
+            .putBoolean("puff_buzz", prefs.puffBuzz)
             .apply()
     }
 
@@ -127,6 +129,9 @@ class PrefsStore(context: Context) {
         keepScreenOn = sp.getBoolean("keep_screen_on", true),
         readyNotification = sp.getBoolean("ready_notification", true),
         lowBatteryAlertPercent = sp.getInt("low_battery", 15),
+        puffTargetSeconds = sp.getInt("puff_target_s", AppPrefs.DEFAULT_PUFF_TARGET_S)
+            .coerceIn(AppPrefs.MIN_PUFF_TARGET_S, AppPrefs.MAX_PUFF_TARGET_S),
+        puffBuzz = sp.getBoolean("puff_buzz", true),
     )
 
     private fun loadPresets(): List<Preset> {

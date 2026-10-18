@@ -1,6 +1,17 @@
 package io.github.orth4x0r.venty.ui.session
 
 import androidx.compose.animation.AnimatedVisibility
+import android.content.Context
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.scaleIn
+import androidx.compose.runtime.withFrameMillis
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalContext
+import io.github.orth4x0r.venty.session.drawProgress
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animate
@@ -233,6 +244,121 @@ fun PuffingIndicator(active: Boolean) {
                 fontWeight = FontWeight.Medium,
             )
         }
+    }
+}
+
+/**
+ * A ring that fills over [targetMs] while a puff is in progress, with the seconds counting up
+ * inside. [startMs] is when the puff began, as the detector saw it (null when not puffing). The
+ * colour runs from heat to ember as it fills; at the target the ring flashes green, bursts
+ * outwards and, with [buzz], the phone gives a double buzz. It keeps counting past the target.
+ */
+@Composable
+fun PuffTimer(startMs: Long?, targetMs: Long, buzz: Boolean) {
+    // Keep the last start around so the ring can animate out with its content still in it.
+    val holder = remember { LongArray(1) }
+    if (startMs != null) holder[0] = startMs
+    AnimatedVisibility(
+        visible = startMs != null,
+        enter = fadeIn(tween(200)) + scaleIn(spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium), initialScale = 0.6f) + expandVertically(tween(200)),
+        exit = fadeOut(tween(300)) + shrinkVertically(tween(300)),
+    ) {
+        // Keyed so a second puff straight after the first starts its own ring afresh.
+        key(holder[0]) { PuffRing(holder[0], startMs != null, targetMs, buzz) }
+    }
+}
+
+@Composable
+private fun PuffRing(startMs: Long, active: Boolean, targetMs: Long, buzz: Boolean) {
+    val context = LocalContext.current
+    val target by rememberUpdatedState(targetMs)
+    val buzzOn by rememberUpdatedState(buzz)
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    // Seeded with whether the target is already behind us, so coming back mid-puff doesn't replay it.
+    var done by remember { mutableStateOf(System.currentTimeMillis() - startMs >= targetMs) }
+    val flash = remember { Animatable(0f) }
+    val burst = remember { Animatable(1f) }
+    LaunchedEffect(active) {
+        if (!active) return@LaunchedEffect
+        while (true) {
+            withFrameMillis { }
+            nowMs = System.currentTimeMillis()
+            if (!done && nowMs - startMs >= target) {
+                done = true
+                if (buzzOn) context.doubleBuzz()
+                launch {
+                    flash.snapTo(1f)
+                    flash.animateTo(0f, tween(900, easing = FastOutSlowInEasing))
+                }
+                launch {
+                    burst.snapTo(0f)
+                    burst.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
+                }
+            }
+        }
+    }
+    val doneMix by animateFloatAsState(if (done) 1f else 0f, tween(300), label = "puffDone")
+
+    val elapsed = (nowMs - startMs).coerceAtLeast(0L)
+    val progress = drawProgress(elapsed, targetMs)
+    val color = lerp(lerp(VentyColors.Heat, VentyColors.Ember, progress), VentyColors.Ready, doneMix)
+    val track = VentyColors.Track
+    Box(Modifier.padding(top = 8.dp).size(84.dp), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val stroke = 7.dp.toPx()
+            val inset = 12.dp.toPx()
+            val arcSize = Size(size.width - 2 * inset, size.height - 2 * inset)
+            val topLeft = Offset(inset, inset)
+            val f = flash.value
+            drawArc(track, 0f, 360f, false, topLeft, arcSize, style = Stroke(stroke))
+            if (f > 0.001f) drawCircle(color.copy(alpha = 0.3f * f), radius = arcSize.width / 2f)
+            if (progress > 0f) {
+                // A wide, faint stroke under the real one for the glow.
+                drawArc(
+                    color.copy(alpha = 0.22f + 0.4f * f), -90f, 360f * progress, false, topLeft, arcSize,
+                    style = Stroke(stroke + 6.dp.toPx(), cap = StrokeCap.Round),
+                )
+                drawArc(color, -90f, 360f * progress, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
+            }
+            val b = burst.value
+            if (b < 1f) {
+                drawCircle(
+                    color.copy(alpha = (1f - b) * 0.7f),
+                    radius = arcSize.width / 2f * (1f + 0.28f * b),
+                    style = Stroke(width = 6.dp.toPx() * (1f - b) + 1.dp.toPx()),
+                )
+            }
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            RollingNumber(
+                value = (elapsed / 1000L).toInt(),
+                style = MaterialTheme.typography.titleLarge,
+                color = color,
+                modifier = Modifier.graphicsLayer {
+                    val pop = 1f + 0.25f * flash.value
+                    scaleX = pop
+                    scaleY = pop
+                },
+            )
+            Text("of ${targetMs / 1000L} s", style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted)
+        }
+    }
+}
+
+/** A short double buzz. Does nothing if the phone has no vibrator. */
+private fun Context.doubleBuzz() {
+    try {
+        val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Vibrator::class.java)
+        }
+        if (vibrator != null && vibrator.hasVibrator()) {
+            vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 70, 80, 110), -1))
+        }
+    } catch (_: Exception) {
+        // A missed buzz is not worth crashing for.
     }
 }
 
