@@ -1,6 +1,7 @@
 package io.github.orth4x0r.venty.prefs
 
 import android.content.Context
+import io.github.orth4x0r.venty.session.RampPlan
 import io.github.orth4x0r.venty.ui.settings.AppPrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +21,32 @@ class PrefsStore(context: Context) {
 
     private val _presets = MutableStateFlow(loadPresets())
     val presets: StateFlow<List<Preset>> = _presets.asStateFlow()
+
+    private val _ramp = MutableStateFlow(loadRamp())
+    /** The last ramp the user set up, used for the next one. */
+    val ramp: StateFlow<RampPlan> = _ramp.asStateFlow()
+
+    fun setRamp(plan: RampPlan) {
+        _ramp.value = plan
+        sp.edit()
+            .putInt("ramp_start", plan.startC)
+            .putInt("ramp_step", plan.stepC)
+            .putLong("ramp_every", plan.stepEveryMs)
+            .putInt("ramp_peak", plan.peakC)
+            .putLong("ramp_hold", plan.holdMs)
+            .apply()
+    }
+
+    private fun loadRamp(): RampPlan {
+        val d = RampPlan()
+        return RampPlan(
+            startC = sp.getInt("ramp_start", d.startC),
+            stepC = sp.getInt("ramp_step", d.stepC),
+            stepEveryMs = sp.getLong("ramp_every", d.stepEveryMs),
+            peakC = sp.getInt("ramp_peak", d.peakC),
+            holdMs = sp.getLong("ramp_hold", d.holdMs),
+        )
+    }
 
     fun setApp(prefs: AppPrefs) {
         _app.value = prefs

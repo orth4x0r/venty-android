@@ -15,6 +15,8 @@ import androidx.compose.ui.platform.LocalContext
 import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.prefs.BatterySample
 import io.github.orth4x0r.venty.prefs.Preset
+import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.session.RampRun
 import io.github.orth4x0r.venty.session.LiveSession
 import io.github.orth4x0r.venty.ui.LavaLayer
 import io.github.orth4x0r.venty.ui.history.HistoryScreen
@@ -183,6 +185,8 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     val batterySamples by app.battery.samples.collectAsStateWithLifecycle()
     val kind by controller.kind.collectAsStateWithLifecycle()
     val pump by controller.pump.collectAsStateWithLifecycle()
+    val ramp by controller.ramp.collectAsStateWithLifecycle()
+    val rampPlan by app.prefs.ramp.collectAsStateWithLifecycle()
 
     val name = when (connection) {
         is ConnectionState.Connected -> connection.name
@@ -409,6 +413,11 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                     onMode = controller::setHeaterMode,
                                     onBoost = controller::setBoostOffset,
                                     onSuperBoost = controller::setSuperBoostOffset,
+                                    ramp = ramp,
+                                    rampPlan = rampPlan,
+                                    onRampPlan = app.prefs::setRamp,
+                                    onStartRamp = { controller.startRamp(rampPlan) },
+                                    onStopRamp = { controller.stopRamp() },
                                     intro = !introDone,
                                     onIntroShown = { introDone = true },
                                     onShockwave = { at, color ->
@@ -555,6 +564,11 @@ private fun Dashboard(
     onMode: (HeaterMode) -> Unit,
     onBoost: (Int) -> Unit,
     onSuperBoost: (Int) -> Unit,
+    ramp: RampRun?,
+    rampPlan: RampPlan,
+    onRampPlan: (RampPlan) -> Unit,
+    onStartRamp: () -> Unit,
+    onStopRamp: () -> Unit,
     /** True the first time the dashboard shows, when its sections lift in one after another. */
     intro: Boolean,
     onIntroShown: () -> Unit,
@@ -713,6 +727,20 @@ private fun Dashboard(
                 BoostSelector(s, onMode)
             }
         }
+    }
+    Spacer(Modifier.height(16.dp))
+    Box(Modifier.enterFromBelow(220, intro)) {
+        RampCard(
+            run = ramp,
+            plan = rampPlan,
+            kind = kind,
+            fahrenheit = f,
+            onPlan = onRampPlan,
+            onStart = onStartRamp,
+            onStop = onStopRamp,
+        )
+    }
+    if (kind.hasBoost) {
         Spacer(Modifier.height(16.dp))
         Box(Modifier.enterFromBelow(240, intro)) { BoostOffsetsCard(s, onBoost, onSuperBoost) }
     }
@@ -1179,7 +1207,7 @@ private fun TargetCard(s: VentyStatus, kind: DeviceKind, onTarget: (Int) -> Unit
 
 /** A round button that fires once on tap and keeps firing while held. */
 @Composable
-private fun RepeatButton(
+internal fun RepeatButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     size: Int = 52,
@@ -1519,7 +1547,7 @@ private fun ConnectingPlaceholder(name: String, onCancel: () -> Unit) {
 
 /** [backdrop] draws over the card's fill and under its content, clipped to its shape. */
 @Composable
-private fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit) {
+internal fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(24.dp)
     Column(
         Modifier

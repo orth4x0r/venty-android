@@ -10,6 +10,9 @@ import android.content.Context
 import android.os.ParcelUuid
 import android.os.SystemClock
 import android.util.Log
+import io.github.orth4x0r.venty.session.RampPhase
+import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.session.RampRun
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +44,9 @@ private const val WRITE_DEBOUNCE_MS = 250L
 // How long an optimistic value is shown before the device's own report wins. Two polls is enough
 // for the write to land; longer makes refused changes flicker between the two values.
 private const val PENDING_HOLD_MS = 1_100L
+private const val RAMP_TICK_MS = 500L
+/** A ramp gives up if the heater still hasn't come on after this long. */
+private const val RAMP_HEATER_ON_TIMEOUT_MS = 15_000L
 
 data class FoundDevice(
     val address: String,
@@ -106,6 +112,14 @@ class VentyController(context: Context) {
     private val _pump = MutableStateFlow(false)
     val pump: StateFlow<Boolean> = _pump.asStateFlow()
     @Volatile private var pendingPump: Pair<Boolean, Long>? = null
+
+    /** The temperature ramp in progress, or null. */
+    private val _ramp = MutableStateFlow<RampRun?>(null)
+    val ramp: StateFlow<RampRun?> = _ramp.asStateFlow()
+    @Volatile private var rampJob: Job? = null
+    @Volatile private var rampId = 0
+    /** Bumped on every (re)connect, so a running ramp re-sends its target to the new link. */
+    @Volatile private var linkGeneration = 0
 
     private var sessionJob: Job? = null
     private var scanJob: Job? = null
@@ -227,6 +241,7 @@ class VentyController(context: Context) {
     }
 
     fun disconnect() {
+        stopRamp()
         scanJob?.cancel()
         sessionJob?.cancel()
         sessionJob = null
@@ -300,6 +315,7 @@ class VentyController(context: Context) {
             if (!announced && deviceStatus != null) {
                 announced = true
                 logLink("Connected")
+                linkGeneration++
                 onUp()
                 _connection.value = ConnectionState.Connected(name, demo)
             }
@@ -431,6 +447,7 @@ class VentyController(context: Context) {
 
     /** Sets the base target temperature. Rapid calls are coalesced into one write. */
     fun setTarget(tenthsC: Int) {
+        if (rampJob != null) stopRamp("Ramp stopped, the temperature is yours again")
         val value = tenthsC.coerceIn(_kind.value.targetRange)
         normalTarget = value
         pendingTarget = value to SystemClock.elapsedRealtime()
@@ -494,6 +511,92 @@ class VentyController(context: Context) {
                 sendSafely(base?.let { VentyProtocol.setHeaterModeAndTarget(HeaterMode.On, it) } ?: VentyProtocol.setHeaterMode(HeaterMode.On))
             }
         }
+    }
+
+    // ---- Ramp -----------------------------------------------------------------------------
+
+    /**
+     * Turns the heater on at the plan's start temperature and steps the target up on schedule,
+     * then holds and turns the heater off. Keeps going through a dropped link, re-sending the
+     * target once it's back. Stops early if the heater is turned off or the target is changed.
+     */
+    fun startRamp(plan: RampPlan) {
+        val kind = _kind.value
+        val p = plan.fitTo(kind.minTarget / 10, kind.maxTarget / 10)
+        rampJob?.cancel()
+        val id = ++rampId
+        _ramp.value = RampRun(p, 0L, p.phaseAt(0L), p.targetAt(0L))
+        rampJob = scope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            var sentTarget = -1
+            var sentGeneration = linkGeneration
+            var sawHeating = false
+            var heaterRequested = false
+            try {
+                while (true) {
+                    val elapsed = SystemClock.elapsedRealtime() - startedAt
+                    val phase = p.phaseAt(elapsed)
+                    if (phase == RampPhase.Done) {
+                        Log.i(TAG, "ramp done, heater off")
+                        pendingHeater = HeaterMode.Off to SystemClock.elapsedRealtime()
+                        publish()
+                        sendSafely(VentyProtocol.setHeaterMode(HeaterMode.Off))
+                        _notices.tryEmit("Ramp finished, heater off")
+                        break
+                    }
+                    val target = p.targetAt(elapsed)
+                    _ramp.value = RampRun(p, elapsed, phase, target)
+                    if (target != sentTarget || linkGeneration != sentGeneration) {
+                        sentTarget = target
+                        sentGeneration = linkGeneration
+                        writeRampTarget(target * 10)
+                        if (!heaterRequested && deviceStatus?.heaterMode?.isHeating != true) {
+                            heaterRequested = true
+                            pendingHeater = HeaterMode.On to SystemClock.elapsedRealtime()
+                            publish()
+                            sendSafely(VentyProtocol.setHeaterMode(HeaterMode.On))
+                        }
+                    }
+                    val mode = deviceStatus?.heaterMode
+                    if (mode?.isHeating == true) {
+                        sawHeating = true
+                    } else if (mode == HeaterMode.Off && pendingHeater == null) {
+                        if (sawHeating) {
+                            _notices.tryEmit("Ramp stopped, the heater was turned off")
+                            break
+                        }
+                        if (elapsed > RAMP_HEATER_ON_TIMEOUT_MS) {
+                            _notices.tryEmit("Ramp stopped, the heater didn't turn on")
+                            break
+                        }
+                    }
+                    delay(RAMP_TICK_MS)
+                }
+            } finally {
+                if (rampId == id) {
+                    _ramp.value = null
+                    rampJob = null
+                }
+            }
+        }
+    }
+
+    /** Ends the ramp and leaves the heater as it is. */
+    fun stopRamp(reason: String? = null) {
+        rampId++
+        rampJob?.cancel()
+        rampJob = null
+        if (_ramp.value != null) reason?.let { _notices.tryEmit(it) }
+        _ramp.value = null
+    }
+
+    private suspend fun writeRampTarget(tenthsC: Int) {
+        val value = tenthsC.coerceIn(_kind.value.targetRange)
+        targetWriteJob?.cancel()
+        normalTarget = value
+        pendingTarget = value to SystemClock.elapsedRealtime()
+        publish()
+        sendSafely(VentyProtocol.setTarget(value, max = _kind.value.maxTarget))
     }
 
     // ---- Settings -------------------------------------------------------------------------
