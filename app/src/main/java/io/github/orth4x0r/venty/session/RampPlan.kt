@@ -58,6 +58,17 @@ data class RampPlan(
     }
 }
 
+/** A named ramp the user can start again with one tap. */
+data class RampProfile(val name: String, val plan: RampPlan) {
+    companion object {
+        val DEFAULTS = listOf(
+            RampProfile("Classic climb", RampPlan()),
+            RampProfile("Flavor chase", RampPlan(startC = 170, stepC = 2, peakC = 190, holdMs = 2 * 60_000L)),
+            RampProfile("Cloud finish", RampPlan(startC = 190, stepC = 4, peakC = 210, holdMs = 2 * 60_000L)),
+        )
+    }
+}
+
 enum class RampPhase { Ramping, Holding, Done }
 
 /** A ramp in progress, as the dashboard shows it. */

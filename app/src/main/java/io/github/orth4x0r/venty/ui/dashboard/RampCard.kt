@@ -1,6 +1,17 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.input.pointer.pointerInput
+import io.github.orth4x0r.venty.session.RampProfile
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -91,6 +102,9 @@ internal fun RampCard(
     onPlan: (RampPlan) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    profiles: List<RampProfile> = emptyList(),
+    onSaveProfile: (RampProfile) -> Unit = {},
+    onRemoveProfile: (RampProfile) -> Unit = {},
 ) {
     val shown = run?.plan ?: plan
     val running = run != null
@@ -132,7 +146,7 @@ internal fun RampCard(
             if (r != null) {
                 RunningBody(r, fahrenheit, onStop)
             } else {
-                IdleBody(plan, kind, fahrenheit, onPlan, onStart)
+                IdleBody(plan, kind, fahrenheit, onPlan, onStart, profiles, onSaveProfile, onRemoveProfile)
             }
         }
     }
@@ -196,12 +210,29 @@ private fun RunningBody(run: RampRun, fahrenheit: Boolean, onStop: () -> Unit) {
 }
 
 @Composable
-private fun IdleBody(plan: RampPlan, kind: DeviceKind, fahrenheit: Boolean, onPlan: (RampPlan) -> Unit, onStart: () -> Unit) {
+private fun IdleBody(
+    plan: RampPlan,
+    kind: DeviceKind,
+    fahrenheit: Boolean,
+    onPlan: (RampPlan) -> Unit,
+    onStart: () -> Unit,
+    profiles: List<RampProfile>,
+    onSaveProfile: (RampProfile) -> Unit,
+    onRemoveProfile: (RampProfile) -> Unit,
+) {
     var editing by rememberSaveable { mutableStateOf(false) }
     val minC = kind.minTarget / 10
     val maxC = kind.maxTarget / 10
     fun change(p: RampPlan) = onPlan(p.fitTo(minC, maxC))
     Column {
+        ProfileChips(
+            profiles = profiles,
+            plan = plan,
+            onApply = { change(it.plan) },
+            onSave = { onSaveProfile(RampProfile(nextProfileName(profiles), plan)) },
+            onRemove = onRemoveProfile,
+        )
+        Spacer(Modifier.height(8.dp))
         Text(summary(plan, fahrenheit), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         Text(
             if (editing) "Done" else "Adjust",
@@ -236,6 +267,87 @@ private fun IdleBody(plan: RampPlan, kind: DeviceKind, fahrenheit: Boolean, onPl
         Spacer(Modifier.height(6.dp))
         RampButton("Start ramp", Icons.Rounded.PlayArrow, filled = true, onClick = onStart, modifier = Modifier.fillMaxWidth())
     }
+}
+
+/**
+ * Saved ramps as chips: tap to load one, long-press to delete it, and "+" saves the current setup
+ * when it isn't saved yet. The loaded one glows.
+ */
+@Composable
+private fun ProfileChips(
+    profiles: List<RampProfile>,
+    plan: RampPlan,
+    onApply: (RampProfile) -> Unit,
+    onSave: () -> Unit,
+    onRemove: (RampProfile) -> Unit,
+) {
+    val haptics = LocalHapticFeedback.current
+    val saved = profiles.any { it.plan == plan }
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        items(profiles, key = { "${it.name}|${it.plan}" }) { profile ->
+            val selected = profile.plan == plan
+            val bg by animateColorAsState(if (selected) VentyColors.Heat.copy(alpha = 0.22f) else VentyColors.Surface, label = "profileBg")
+            val border by animateColorAsState(if (selected) VentyColors.Heat else Color.White.copy(alpha = 0.08f), label = "profileBorder")
+            val scale by animateFloatAsState(if (selected) 1.04f else 1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow), label = "profileScale")
+            Text(
+                profile.name,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (selected) VentyColors.Ember else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .animateItem()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(bg)
+                    .border(1.dp, border, RoundedCornerShape(16.dp))
+                    .pointerInput(profile) {
+                        detectTapGestures(
+                            onTap = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onApply(profile)
+                            },
+                            onLongPress = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onRemove(profile)
+                            },
+                        )
+                    }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+        if (!saved && profiles.size < 8) {
+            item(key = "save") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .animateItem()
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(1.dp, VentyColors.Heat.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+                        .clickable {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onSave()
+                        }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Rounded.Add, contentDescription = null, tint = VentyColors.Heat, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Save", style = MaterialTheme.typography.labelLarge, color = VentyColors.Heat)
+                }
+            }
+        }
+    }
+}
+
+private fun nextProfileName(profiles: List<RampProfile>): String {
+    var n = 1
+    while (profiles.any { it.name == "My ramp $n" }) n++
+    return "My ramp $n"
 }
 
 @Composable

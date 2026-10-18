@@ -16,6 +16,7 @@ import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.prefs.BatterySample
 import io.github.orth4x0r.venty.prefs.Preset
 import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.session.RampProfile
 import io.github.orth4x0r.venty.session.RampRun
 import io.github.orth4x0r.venty.session.LiveSession
 import io.github.orth4x0r.venty.ui.LavaLayer
@@ -187,6 +188,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     val pump by controller.pump.collectAsStateWithLifecycle()
     val ramp by controller.ramp.collectAsStateWithLifecycle()
     val rampPlan by app.prefs.ramp.collectAsStateWithLifecycle()
+    val rampProfiles by app.prefs.rampProfiles.collectAsStateWithLifecycle()
 
     val name = when (connection) {
         is ConnectionState.Connected -> connection.name
@@ -242,7 +244,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     var notice by remember { mutableStateOf<String?>(null) }
     var undo by remember { mutableStateOf<(() -> Unit)?>(null) }
     fun showNotice(msg: String, forMs: Long = 3500) {
-        if (undo != null && !msg.startsWith("Removed preset")) undo = null
+        if (undo != null && !msg.startsWith("Removed ")) undo = null
         notice = msg
         scope.launch {
             delay(forMs)
@@ -418,6 +420,17 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                     onRampPlan = app.prefs::setRamp,
                                     onStartRamp = { controller.startRamp(rampPlan) },
                                     onStopRamp = { controller.stopRamp() },
+                                    rampProfiles = rampProfiles,
+                                    onSaveRampProfile = { p ->
+                                        app.prefs.addRampProfile(p)
+                                        showNotice("Saved ${p.name}")
+                                    },
+                                    onRemoveRampProfile = { p ->
+                                        val at = rampProfiles.indexOf(p)
+                                        app.prefs.removeRampProfile(p)
+                                        undo = { app.prefs.insertRampProfile(at, p) }
+                                        showNotice("Removed ramp ${p.name}", forMs = 5000)
+                                    },
                                     intro = !introDone,
                                     onIntroShown = { introDone = true },
                                     onShockwave = { at, color ->
@@ -569,6 +582,9 @@ private fun Dashboard(
     onRampPlan: (RampPlan) -> Unit,
     onStartRamp: () -> Unit,
     onStopRamp: () -> Unit,
+    rampProfiles: List<RampProfile>,
+    onSaveRampProfile: (RampProfile) -> Unit,
+    onRemoveRampProfile: (RampProfile) -> Unit,
     /** True the first time the dashboard shows, when its sections lift in one after another. */
     intro: Boolean,
     onIntroShown: () -> Unit,
@@ -738,6 +754,9 @@ private fun Dashboard(
             onPlan = onRampPlan,
             onStart = onStartRamp,
             onStop = onStopRamp,
+            profiles = rampProfiles,
+            onSaveProfile = onSaveRampProfile,
+            onRemoveProfile = onRemoveRampProfile,
         )
     }
     if (kind.hasBoost) {

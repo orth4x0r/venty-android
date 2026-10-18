@@ -2,6 +2,7 @@ package io.github.orth4x0r.venty.prefs
 
 import android.content.Context
 import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.session.RampProfile
 import io.github.orth4x0r.venty.ui.settings.AppPrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +36,58 @@ class PrefsStore(context: Context) {
             .putInt("ramp_peak", plan.peakC)
             .putLong("ramp_hold", plan.holdMs)
             .apply()
+    }
+
+    private val _rampProfiles = MutableStateFlow(loadRampProfiles())
+    /** Saved ramps, shown as chips on the ramp card. */
+    val rampProfiles: StateFlow<List<RampProfile>> = _rampProfiles.asStateFlow()
+
+    fun addRampProfile(profile: RampProfile) = saveRampProfiles((_rampProfiles.value + profile).takeLast(MAX_RAMP_PROFILES))
+
+    fun removeRampProfile(profile: RampProfile) = saveRampProfiles(_rampProfiles.value - profile)
+
+    /** Puts [profile] back at [index], for undo. */
+    fun insertRampProfile(index: Int, profile: RampProfile) {
+        val list = _rampProfiles.value
+        if (profile in list) return
+        saveRampProfiles(list.toMutableList().apply { add(index.coerceIn(0, size), profile) }.take(MAX_RAMP_PROFILES))
+    }
+
+    private fun loadRampProfiles(): List<RampProfile> {
+        val raw = sp.getString("ramp_profiles", null) ?: return RampProfile.DEFAULTS
+        return runCatching {
+            val arr = JSONArray(raw)
+            List(arr.length()) { i ->
+                val o = arr.getJSONObject(i)
+                RampProfile(
+                    o.getString("name"),
+                    RampPlan(
+                        startC = o.getInt("start"),
+                        stepC = o.getInt("step"),
+                        stepEveryMs = o.getLong("every"),
+                        peakC = o.getInt("peak"),
+                        holdMs = o.getLong("hold"),
+                    ),
+                )
+            }
+        }.getOrDefault(RampProfile.DEFAULTS)
+    }
+
+    private fun saveRampProfiles(list: List<RampProfile>) {
+        _rampProfiles.value = list
+        val arr = JSONArray()
+        list.forEach {
+            arr.put(
+                JSONObject()
+                    .put("name", it.name)
+                    .put("start", it.plan.startC)
+                    .put("step", it.plan.stepC)
+                    .put("every", it.plan.stepEveryMs)
+                    .put("peak", it.plan.peakC)
+                    .put("hold", it.plan.holdMs),
+            )
+        }
+        sp.edit().putString("ramp_profiles", arr.toString()).apply()
     }
 
     private fun loadRamp(): RampPlan {
@@ -96,6 +149,7 @@ class PrefsStore(context: Context) {
 
     private companion object {
         const val MAX_PRESETS = 8
+        const val MAX_RAMP_PROFILES = 8
         val DEFAULT_PRESETS = listOf(Preset("Flavor", 1800), Preset("Balanced", 1900), Preset("Clouds", 2000))
     }
 }
