@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.ScreenLockPortrait
 import androidx.compose.material.icons.rounded.Thermostat
+import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,7 +73,17 @@ data class AppPrefs(
     val readyNotification: Boolean,
     /** Alert when the battery falls to this percentage. 0 turns the alert off. */
     val lowBatteryAlertPercent: Int,
-)
+    /** The draw length the puff timer ring fills over, in seconds. */
+    val puffTargetSeconds: Int = DEFAULT_PUFF_TARGET_S,
+    /** Buzz the phone when a draw reaches [puffTargetSeconds]. */
+    val puffBuzz: Boolean = true,
+) {
+    companion object {
+        const val DEFAULT_PUFF_TARGET_S = 8
+        const val MIN_PUFF_TARGET_S = 3
+        const val MAX_PUFF_TARGET_S = 20
+    }
+}
 
 @Composable
 fun SettingsScreen(
@@ -243,6 +254,28 @@ fun SettingsScreen(
                 checked = appPrefs.readyNotification,
                 enabled = true,
                 onChange = { onAppPrefs(appPrefs.copy(readyNotification = it)) },
+            )
+            RowDivider()
+            SliderRow(
+                icon = Icons.Rounded.Timer,
+                title = "Puff timer length",
+                subtitle = "The ring fills over this draw length",
+                valueLabel = "${appPrefs.puffTargetSeconds} s",
+                value = appPrefs.puffTargetSeconds.toFloat(),
+                range = AppPrefs.MIN_PUFF_TARGET_S.toFloat()..AppPrefs.MAX_PUFF_TARGET_S.toFloat(),
+                steps = AppPrefs.MAX_PUFF_TARGET_S - AppPrefs.MIN_PUFF_TARGET_S - 1,
+                enabled = true,
+                labelFor = { "${it.roundToInt()} s" },
+                onCommit = { onAppPrefs(appPrefs.copy(puffTargetSeconds = it.roundToInt())) },
+            )
+            RowDivider()
+            SwitchRow(
+                icon = Icons.Rounded.Vibration,
+                title = "Puff timer buzz",
+                subtitle = "Double buzz when a draw reaches the length",
+                checked = appPrefs.puffBuzz,
+                enabled = true,
+                onChange = { onAppPrefs(appPrefs.copy(puffBuzz = it)) },
             )
         }
 

@@ -21,7 +21,7 @@ import io.github.orth4x0r.venty.session.LiveSession
 import io.github.orth4x0r.venty.ui.LavaLayer
 import io.github.orth4x0r.venty.ui.history.HistoryScreen
 import io.github.orth4x0r.venty.ui.session.LiveSessionStrip
-import io.github.orth4x0r.venty.ui.session.PuffingIndicator
+import io.github.orth4x0r.venty.ui.session.PuffTimer
 import io.github.orth4x0r.venty.ui.settings.SettingsScreen
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -409,6 +409,8 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                     presets = presets,
                                     batterySamples = batterySamples,
                                     lifetimePuffs = lifetimePuffs,
+                                    puffTargetMs = prefs.puffTargetSeconds * 1000L,
+                                    puffBuzz = prefs.puffBuzz,
                                     onTarget = controller::setTarget,
                                     onMode = controller::setHeaterMode,
                                     onBoost = controller::setBoostOffset,
@@ -560,6 +562,8 @@ private fun Dashboard(
     presets: List<Preset>,
     batterySamples: List<BatterySample>,
     lifetimePuffs: Int,
+    puffTargetMs: Long,
+    puffBuzz: Boolean,
     onTarget: (Int) -> Unit,
     onMode: (HeaterMode) -> Unit,
     onBoost: (Int) -> Unit,
@@ -692,7 +696,7 @@ private fun Dashboard(
             )
         }
         StatusPill(phase, s)
-        PuffingIndicator(active = live?.puffing == true)
+        PuffTimer(startMs = live?.puffStartMs, targetMs = puffTargetMs, buzz = puffBuzz)
         if (s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
             Spacer(Modifier.height(10.dp))
             Text(
