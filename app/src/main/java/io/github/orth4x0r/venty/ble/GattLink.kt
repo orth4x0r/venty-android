@@ -13,6 +13,7 @@ import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.sync.Mutex
@@ -105,11 +106,21 @@ class GattLink private constructor() : VentyLink {
         // end the reconnect loop instead of triggering a retry.
         withTimeoutOrNull(CONNECT_TIMEOUT_MS) { connected.await() } ?: throw LinkLostException("Connection timed out")
 
-        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        // No high-priority request: a 500 ms poll doesn't need a 7.5 ms connection interval, and
+        // the official app doesn't ask for one either.
         runOp("discover services") { gatt.discoverServices() }
 
-        val service = gatt.getService(VentyProtocol.SERVICE_UUID)
-            ?: throw LinkLostException("Venty service not found. Is this a Venty?")
+        // Right after a drop Android can hand back a stale, empty service cache. Clear it and look
+        // again before giving up.
+        var service = gatt.getService(VentyProtocol.SERVICE_UUID)
+        if (service == null) {
+            Log.w(TAG, "service missing after discovery; refreshing the GATT cache")
+            refreshCache()
+            delay(600)
+            runOp("rediscover services") { gatt.discoverServices() }
+            service = gatt.getService(VentyProtocol.SERVICE_UUID)
+                ?: throw LinkLostException("Venty service not found. Is this a Venty?")
+        }
         control = service.getCharacteristic(VentyProtocol.CONTROL_UUID)
             ?: throw LinkLostException("Venty control characteristic not found")
         if (control.properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0) {
@@ -120,6 +131,18 @@ class GattLink private constructor() : VentyLink {
         val cccd = control.getDescriptor(VentyProtocol.CCCD_UUID)
             ?: throw LinkLostException("Notification descriptor missing")
         runOp("enable notifications") { writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) }
+    }
+
+    override suspend fun nudge() {
+        gatt.setCharacteristicNotification(control, true)
+        val cccd = control.getDescriptor(VentyProtocol.CCCD_UUID) ?: return
+        runOp("re-enable notifications") { writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) }
+    }
+
+    /** BluetoothGatt.refresh() is hidden API but widely used to drop a stale service cache. */
+    private fun refreshCache() {
+        runCatching { gatt.javaClass.getMethod("refresh").invoke(gatt) }
+            .onFailure { Log.w(TAG, "GATT cache refresh unavailable", it) }
     }
 
     /** Starts one GATT operation and suspends until its callback reports success. */

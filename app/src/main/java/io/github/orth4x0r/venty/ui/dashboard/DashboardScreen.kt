@@ -15,11 +15,18 @@ import androidx.compose.ui.platform.LocalContext
 import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.prefs.BatterySample
 import io.github.orth4x0r.venty.prefs.Preset
+import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.session.RampProfile
+import io.github.orth4x0r.venty.session.RampRun
+import io.github.orth4x0r.venty.session.BatteryForecast
 import io.github.orth4x0r.venty.session.LiveSession
+import io.github.orth4x0r.venty.session.MIN_FORECAST_SESSIONS
+import io.github.orth4x0r.venty.session.SessionRecord
+import io.github.orth4x0r.venty.session.estimateBatteryForecast
 import io.github.orth4x0r.venty.ui.LavaLayer
 import io.github.orth4x0r.venty.ui.history.HistoryScreen
 import io.github.orth4x0r.venty.ui.session.LiveSessionStrip
-import io.github.orth4x0r.venty.ui.session.PuffingIndicator
+import io.github.orth4x0r.venty.ui.session.PuffTimer
 import io.github.orth4x0r.venty.ui.settings.SettingsScreen
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -183,6 +190,9 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     val batterySamples by app.battery.samples.collectAsStateWithLifecycle()
     val kind by controller.kind.collectAsStateWithLifecycle()
     val pump by controller.pump.collectAsStateWithLifecycle()
+    val ramp by controller.ramp.collectAsStateWithLifecycle()
+    val rampPlan by app.prefs.ramp.collectAsStateWithLifecycle()
+    val rampProfiles by app.prefs.rampProfiles.collectAsStateWithLifecycle()
 
     val name = when (connection) {
         is ConnectionState.Connected -> connection.name
@@ -238,7 +248,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     var notice by remember { mutableStateOf<String?>(null) }
     var undo by remember { mutableStateOf<(() -> Unit)?>(null) }
     fun showNotice(msg: String, forMs: Long = 3500) {
-        if (undo != null && !msg.startsWith("Removed preset")) undo = null
+        if (undo != null && !msg.startsWith("Removed ")) undo = null
         notice = msg
         scope.launch {
             delay(forMs)
@@ -404,11 +414,30 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                     live = live,
                                     presets = presets,
                                     batterySamples = batterySamples,
+                                    history = history,
                                     lifetimePuffs = lifetimePuffs,
+                                    puffTargetMs = prefs.puffTargetSeconds * 1000L,
+                                    puffBuzz = prefs.puffBuzz,
                                     onTarget = controller::setTarget,
                                     onMode = controller::setHeaterMode,
                                     onBoost = controller::setBoostOffset,
                                     onSuperBoost = controller::setSuperBoostOffset,
+                                    ramp = ramp,
+                                    rampPlan = rampPlan,
+                                    onRampPlan = app.prefs::setRamp,
+                                    onStartRamp = { controller.startRamp(rampPlan) },
+                                    onStopRamp = { controller.stopRamp() },
+                                    rampProfiles = rampProfiles,
+                                    onSaveRampProfile = { p ->
+                                        app.prefs.addRampProfile(p)
+                                        showNotice("Saved ${p.name}")
+                                    },
+                                    onRemoveRampProfile = { p ->
+                                        val at = rampProfiles.indexOf(p)
+                                        app.prefs.removeRampProfile(p)
+                                        undo = { app.prefs.insertRampProfile(at, p) }
+                                        showNotice("Removed ramp ${p.name}", forMs = 5000)
+                                    },
                                     intro = !introDone,
                                     onIntroShown = { introDone = true },
                                     onShockwave = { at, color ->
@@ -550,11 +579,22 @@ private fun Dashboard(
     live: LiveSession?,
     presets: List<Preset>,
     batterySamples: List<BatterySample>,
+    history: List<SessionRecord>,
     lifetimePuffs: Int,
+    puffTargetMs: Long,
+    puffBuzz: Boolean,
     onTarget: (Int) -> Unit,
     onMode: (HeaterMode) -> Unit,
     onBoost: (Int) -> Unit,
     onSuperBoost: (Int) -> Unit,
+    ramp: RampRun?,
+    rampPlan: RampPlan,
+    onRampPlan: (RampPlan) -> Unit,
+    onStartRamp: () -> Unit,
+    onStopRamp: () -> Unit,
+    rampProfiles: List<RampProfile>,
+    onSaveRampProfile: (RampProfile) -> Unit,
+    onRemoveRampProfile: (RampProfile) -> Unit,
     /** True the first time the dashboard shows, when its sections lift in one after another. */
     intro: Boolean,
     onIntroShown: () -> Unit,
@@ -678,7 +718,7 @@ private fun Dashboard(
             )
         }
         StatusPill(phase, s)
-        PuffingIndicator(active = live?.puffing == true)
+        PuffTimer(startMs = live?.puffStartMs, targetMs = puffTargetMs, buzz = puffBuzz)
         if (s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
             Spacer(Modifier.height(10.dp))
             Text(
@@ -713,12 +753,29 @@ private fun Dashboard(
                 BoostSelector(s, onMode)
             }
         }
+    }
+    Spacer(Modifier.height(16.dp))
+    Box(Modifier.enterFromBelow(220, intro)) {
+        RampCard(
+            run = ramp,
+            plan = rampPlan,
+            kind = kind,
+            fahrenheit = f,
+            onPlan = onRampPlan,
+            onStart = onStartRamp,
+            onStop = onStopRamp,
+            profiles = rampProfiles,
+            onSaveProfile = onSaveRampProfile,
+            onRemoveProfile = onRemoveRampProfile,
+        )
+    }
+    if (kind.hasBoost) {
         Spacer(Modifier.height(16.dp))
         Box(Modifier.enterFromBelow(240, intro)) { BoostOffsetsCard(s, onBoost, onSuperBoost) }
     }
     if (kind.hasBattery) {
         Spacer(Modifier.height(16.dp))
-        Box(Modifier.enterFromBelow(280, intro)) { BatteryCard(s, batterySamples) }
+        Box(Modifier.enterFromBelow(280, intro)) { BatteryCard(s, batterySamples, history, live) }
     }
     Spacer(Modifier.height(16.dp))
     Column(Modifier.enterFromBelow(320, intro)) { InfoRow(s, info, lifetimePuffs, kind) }
@@ -893,10 +950,17 @@ private class PresetIds {
     }
 }
 
-/** Battery level, a 24 h sparkline and an estimate of time left from the recent drain rate. */
+/**
+ * Battery level, a 24 h sparkline, an estimate of time left from the recent drain rate and a
+ * forecast of how many sessions the charge covers.
+ */
 @Composable
-private fun BatteryCard(s: VentyStatus, samples: List<BatterySample>) {
+private fun BatteryCard(s: VentyStatus, samples: List<BatterySample>, history: List<SessionRecord>, live: LiveSession?) {
     val now = System.currentTimeMillis()
+    val heatingSince = live?.startMs
+    val forecast = remember(history, samples, s.battery, s.charging, heatingSince) {
+        estimateBatteryForecast(s.battery, s.charging, heatingSince, history, samples, now)
+    }
     val day = remember(samples) { samples.filter { it.atMs >= now - 24 * 3_600_000L } }
     // Drain rate from the latest unbroken stretch off the charger within the last 3 h.
     val estimate = remember(samples, s.charging) {
@@ -943,8 +1007,102 @@ private fun BatteryCard(s: VentyStatus, samples: List<BatterySample>) {
                         color = if (s.charging) VentyColors.Ready else VentyColors.Muted,
                     )
                 }
+                AnimatedVisibility(
+                    visible = !s.charging,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    SessionForecast(forecast, color)
+                }
             }
             Sparkline(day, color, Modifier.width(130.dp).height(56.dp))
+        }
+    }
+}
+
+/** "About 4 sessions left" under a row of pips, or a progress note while still learning. */
+@Composable
+private fun SessionForecast(f: BatteryForecast, color: Color) {
+    val left = f.sessionsLeft
+    val total = f.sessionsPerCharge
+    Column(Modifier.padding(top = 8.dp)) {
+        if (left == null || total == null) {
+            Text(
+                "Learning your usage… ${f.usedSessions.coerceAtMost(MIN_FORECAST_SESSIONS)}/$MIN_FORECAST_SESSIONS sessions",
+                style = MaterialTheme.typography.bodySmall,
+                color = VentyColors.Muted,
+            )
+        } else {
+            SessionPips(left, maxOf(total, left).coerceIn(3, 10), if (left <= 1) VentyColors.Boost else color)
+            Spacer(Modifier.height(6.dp))
+            val style = MaterialTheme.typography.bodySmall
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (left == 0) {
+                    Text("Less than one session left", style = style, color = VentyColors.Muted)
+                } else {
+                    Text("About ", style = style, color = VentyColors.Muted)
+                    RollingNumber(left, style, MaterialTheme.colorScheme.onSurface)
+                    Text(if (left == 1) " session left" else " sessions left", style = style, color = VentyColors.Muted)
+                }
+            }
+            f.heatingMinutesLeft?.let { m ->
+                Text(
+                    "About ${if (m >= 90) "${m / 60} h ${m % 60} m" else "$m min"} of heating left",
+                    style = style,
+                    color = VentyColors.Muted,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One pip per session a full charge covers. They fill in one after another when the card first
+ * appears and spring up or down as the level changes; the last one pulses when it's nearly out.
+ */
+@Composable
+private fun SessionPips(filled: Int, total: Int, color: Color) {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val lastLit = filled.coerceAtMost(total) - 1
+    Row(
+        Modifier.clearAndSetSemantics { },
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(total) { i ->
+            val on = shown && i < filled
+            val fillColor by animateColorAsState(
+                if (on) color else VentyColors.Track,
+                tween(350, delayMillis = i * 60),
+                label = "pipColor",
+            )
+            val scale by animateFloatAsState(
+                if (on) 1f else 0.72f,
+                spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                label = "pipScale",
+            )
+            val pulse = if (filled == 1 && i == lastLit) {
+                rememberInfiniteTransition(label = "pipPulse").animateFloat(
+                    initialValue = 1f,
+                    targetValue = 0.35f,
+                    animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+                    label = "pipPulseAlpha",
+                ).value
+            } else {
+                1f
+            }
+            Box(
+                Modifier
+                    .size(width = 10.dp, height = 14.dp)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = pulse
+                    }
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(fillColor),
+            )
         }
     }
 }
@@ -1179,7 +1337,7 @@ private fun TargetCard(s: VentyStatus, kind: DeviceKind, onTarget: (Int) -> Unit
 
 /** A round button that fires once on tap and keeps firing while held. */
 @Composable
-private fun RepeatButton(
+internal fun RepeatButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     size: Int = 52,
@@ -1519,7 +1677,7 @@ private fun ConnectingPlaceholder(name: String, onCancel: () -> Unit) {
 
 /** [backdrop] draws over the card's fill and under its content, clipped to its shape. */
 @Composable
-private fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit) {
+internal fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(24.dp)
     Column(
         Modifier
