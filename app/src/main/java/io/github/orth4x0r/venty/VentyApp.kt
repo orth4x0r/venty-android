@@ -58,6 +58,11 @@ class VentyApp : Application() {
             }
         }
 
+        // Remember the device's body colour for the "match my device" accent.
+        scope.launch {
+            controller.info.collect { i -> i.color?.let(prefs::setDeviceColor) }
+        }
+
         // Re-render the home-screen widget only when something it shows changes.
         scope.launch {
             combine(controller.status, controller.connection, controller.kind) { s, c, k ->

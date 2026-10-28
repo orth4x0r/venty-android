@@ -3,7 +3,9 @@ package io.github.orth4x0r.venty.prefs
 import android.content.Context
 import io.github.orth4x0r.venty.session.RampPlan
 import io.github.orth4x0r.venty.session.RampProfile
+import io.github.orth4x0r.venty.ble.DeviceColor
 import io.github.orth4x0r.venty.ui.settings.AppPrefs
+import io.github.orth4x0r.venty.ui.theme.Accent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -110,6 +112,8 @@ class PrefsStore(context: Context) {
             .putInt("low_battery", prefs.lowBatteryAlertPercent)
             .putInt("puff_target_s", prefs.puffTargetSeconds)
             .putBoolean("puff_buzz", prefs.puffBuzz)
+            .putString("accent", prefs.accent.name)
+            .putBoolean("heat_haptics", prefs.heatHaptics)
             .apply()
     }
 
@@ -132,7 +136,21 @@ class PrefsStore(context: Context) {
         puffTargetSeconds = sp.getInt("puff_target_s", AppPrefs.DEFAULT_PUFF_TARGET_S)
             .coerceIn(AppPrefs.MIN_PUFF_TARGET_S, AppPrefs.MAX_PUFF_TARGET_S),
         puffBuzz = sp.getBoolean("puff_buzz", true),
+        accent = Accent.fromName(sp.getString("accent", null)),
+        heatHaptics = sp.getBoolean("heat_haptics", true),
     )
+
+    private val _deviceColor = MutableStateFlow(
+        sp.getString("device_color", null)?.let { n -> DeviceColor.entries.firstOrNull { it.name == n } },
+    )
+    /** The last device's body colour, kept so the accent doesn't flip back while disconnected. */
+    val deviceColor: StateFlow<DeviceColor?> = _deviceColor.asStateFlow()
+
+    fun setDeviceColor(color: DeviceColor) {
+        if (_deviceColor.value == color) return
+        _deviceColor.value = color
+        sp.edit().putString("device_color", color.name).apply()
+    }
 
     private fun loadPresets(): List<Preset> {
         val raw = sp.getString("presets", null) ?: return DEFAULT_PRESETS

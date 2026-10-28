@@ -23,7 +23,12 @@ import io.github.orth4x0r.venty.session.LiveSession
 import io.github.orth4x0r.venty.session.MIN_FORECAST_SESSIONS
 import io.github.orth4x0r.venty.session.SessionRecord
 import io.github.orth4x0r.venty.session.estimateBatteryForecast
+import io.github.orth4x0r.venty.ui.HeatAura
+import io.github.orth4x0r.venty.ui.HeatHaptics
 import io.github.orth4x0r.venty.ui.LavaLayer
+import io.github.orth4x0r.venty.ui.findmy.FindMyScreen
+import io.github.orth4x0r.venty.ui.heatProgress
+import io.github.orth4x0r.venty.ui.wrapped.WrappedScreen
 import io.github.orth4x0r.venty.ui.history.HistoryScreen
 import io.github.orth4x0r.venty.ui.session.LiveSessionStrip
 import io.github.orth4x0r.venty.ui.session.PuffTimer
@@ -174,7 +179,16 @@ import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class Page { Main, Settings, History }
+private enum class Page {
+    Main, Settings, History, FindMy, Wrapped;
+
+    /** Where back goes: the radar returns to Settings and the recap to History. */
+    val parent: Page get() = when (this) {
+        FindMy -> Settings
+        Wrapped -> History
+        else -> Main
+    }
+}
 
 @Composable
 fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
@@ -210,6 +224,15 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
         onDispose { view.keepScreenOn = false }
     }
 
+    // The phone's half of the heat-up: a quickening heartbeat, then a pulse when it's ready.
+    val currentLive by rememberUpdatedState(live)
+    HeatHaptics(
+        heating = heaterOn,
+        ready = heaterOn && status?.setpointReached == true,
+        progress = { currentLive?.heatProgress() },
+        enabled = prefs.heatHaptics,
+    )
+
     var page by rememberSaveable { mutableStateOf(Page.Main) }
     val scope = rememberCoroutineScope()
 
@@ -226,7 +249,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     // A button back always leaves the usual way, whatever edge the last swipe came from.
     fun closePage() {
         backFromLeft = true
-        page = Page.Main
+        page = page.parent
     }
     PredictiveBackHandler(enabled = page != Page.Main) { events ->
         backSettle?.cancel()
@@ -235,7 +258,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                 backFromLeft = e.swipeEdge == BackEventCompat.EDGE_LEFT
                 backProgress = e.progress
             }
-            page = Page.Main
+            page = page.parent
         } catch (cancelled: CancellationException) {
             backSettle = scope.launch {
                 animate(backProgress, 0f, animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium)) { v, _ ->
@@ -299,6 +322,18 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                 },
                 color = ambientPhase?.color ?: VentyColors.Boost,
             )
+            // Heat haze rising from the bottom edge: a low flicker while heating that grows as the
+            // heater closes in, a simmer once ready, and a roar in boost.
+            HeatAura(
+                level = when (ambientPhase) {
+                    HeaterPhase.Heating -> 0.4f + 0.6f * (live?.heatProgress() ?: 0f)
+                    HeaterPhase.Ready -> 0.5f
+                    HeaterPhase.Boost -> 1.2f
+                    HeaterPhase.SuperBoost -> 1.5f
+                    else -> 0f
+                },
+                color = ambientPhase?.color ?: VentyColors.Heat,
+            )
             ColorFlash(key = ambientPhase, color = ambientPhase?.color ?: VentyColors.Heat)
             // The Volcano's pump sends a stream of air bubbles up the screen.
             if (kind.hasPump) Embers(active = pump, color = VentyColors.Air, modifier = Modifier.fillMaxSize(), rate = 1.6f)
@@ -311,7 +346,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                     // follows the swipe: a right-edge back keeps the page moving left, the way the
                     // gesture was already carrying it, instead of jumping round.
                     val dir = when {
-                        targetState != Page.Main -> 1
+                        targetState != Page.Main && targetState.parent == initialState -> 1
                         backFromLeft -> -1
                         else -> 1
                     }
@@ -348,7 +383,9 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             onBrightness = controller::setBrightness,
                             onVibration = controller::setVibration,
                             onBoostTimeoutDisabled = controller::setBoostTimeoutDisabled,
-                            onFindMy = controller::findMyDevice,
+                            onFindMy = { openPage(Page.FindMy) },
+                            onBlePermanent = controller::setBlePermanent,
+                            deviceAddress = controller.lastDeviceAddress,
                             onAppPrefs = app.prefs::setApp,
                             onBack = { closePage() },
                         )
@@ -357,6 +394,17 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             lifetimePuffs = lifetimePuffs,
                             fahrenheit = status?.fahrenheit == true,
                             onClear = app.sessions::clearHistory,
+                            onWrapped = { openPage(Page.Wrapped) },
+                            onBack = { closePage() },
+                        )
+                        Page.FindMy -> FindMyScreen(
+                            onBuzz = controller::findMyDevice,
+                            readRssi = controller::readRssi,
+                            onBack = { closePage() },
+                        )
+                        Page.Wrapped -> WrappedScreen(
+                            history = history,
+                            fahrenheit = status?.fahrenheit == true,
                             onBack = { closePage() },
                         )
                         Page.Main -> Column(

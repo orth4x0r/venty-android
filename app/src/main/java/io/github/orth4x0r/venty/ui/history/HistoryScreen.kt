@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -95,6 +96,7 @@ fun HistoryScreen(
     fahrenheit: Boolean,
     onClear: () -> Unit,
     onBack: () -> Unit,
+    onWrapped: () -> Unit = {},
 ) {
     var confirmClear by remember { mutableStateOf(false) }
     val zone = remember { ZoneId.systemDefault() }
@@ -152,6 +154,9 @@ fun HistoryScreen(
                 ) {
                     item(key = "hero") {
                         Hero(lifetimePuffs, sessionsThisWeek, avgPuffs, Modifier.enterFromBelow(0))
+                    }
+                    item(key = "wrapped") {
+                        WrappedTeaser(history, onWrapped, Modifier.enterFromBelow(45))
                     }
                     item(key = "chart") {
                         ChartCard(perDay, today, Modifier.enterFromBelow(90))
@@ -582,3 +587,35 @@ private fun formatDuration(ms: Long): String {
 private fun formatDraw(ms: Long): String =
     if (ms >= 60_000L) "%d:%02d".format(ms / 60_000L, (ms % 60_000L) / 1000L) else "%.1f s".format(Locale.US, ms / 1000.0)
 
+
+/** "Your October, wrapped": a shimmering banner that opens the month-in-review story. */
+@Composable
+private fun WrappedTeaser(history: List<SessionRecord>, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val month = remember(history) {
+        history.firstOrNull()?.let { java.time.Instant.ofEpochMilli(it.startMs).atZone(ZoneId.systemDefault()).month }
+    } ?: return
+    val name = month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
+    val shimmer = io.github.orth4x0r.venty.ui.shimmerBrush(listOf(VentyColors.Heat, VentyColors.Ember), enabled = true)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(io.github.orth4x0r.venty.ui.theme.VentyShapes.Large)
+            .background(
+                androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(VentyColors.Heat.copy(alpha = 0.35f), VentyColors.SuperBoost.copy(alpha = 0.25f)),
+                ),
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Your $name, wrapped",
+                style = MaterialTheme.typography.titleLarge.let { st -> shimmer?.let { st.copy(brush = it) } ?: st },
+            )
+            Text("Sessions, puffs, your go-to temp and more", style = MaterialTheme.typography.bodySmall, color = VentyColors.OnSurface.copy(alpha = 0.75f))
+        }
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null)
+    }
+}
