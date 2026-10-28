@@ -19,6 +19,8 @@ import java.util.UUID
 
 private const val TAG = "GattVolcanoLink"
 private const val CONNECT_TIMEOUT_MS = 12_000L
+/** A background (autoConnect) request waits for the device to come back; renewed after this. */
+private const val AUTO_CONNECT_TIMEOUT_MS = 10 * 60_000L
 private const val OP_TIMEOUT_MS = 3_000L
 
 /**
@@ -129,11 +131,15 @@ class GattVolcanoLink private constructor() : VolcanoLink() {
     private fun characteristic(uuid: UUID) =
         characteristics[uuid] ?: throw LinkLostException("Volcano characteristic $uuid not found")
 
-    private suspend fun open(context: Context, device: BluetoothDevice) {
-        gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+    private suspend fun open(context: Context, device: BluetoothDevice, autoConnect: Boolean) {
+        // autoConnect = true hands the request to the Bluetooth stack, which connects the moment
+        // the device advertises again, without scanning. Slower to start than a direct connect,
+        // so it's only used once the device has been gone a while.
+        gatt = device.connectGatt(context, autoConnect, callback, BluetoothDevice.TRANSPORT_LE)
             ?: throw LinkLostException("connectGatt returned null")
         // withTimeoutOrNull, not withTimeout: its exception would end the reconnect loop.
-        withTimeoutOrNull(CONNECT_TIMEOUT_MS) { connected.await() } ?: throw LinkLostException("Connection timed out")
+        val timeout = if (autoConnect) AUTO_CONNECT_TIMEOUT_MS else CONNECT_TIMEOUT_MS
+        withTimeoutOrNull(timeout) { connected.await() } ?: throw LinkLostException("Connection timed out")
 
         gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
         runOp("discover services") { gatt.discoverServices() }
@@ -177,11 +183,14 @@ class GattVolcanoLink private constructor() : VolcanoLink() {
     }
 
     companion object {
-        /** Connects, finds the Volcano services, reads every value and enables notifications. */
-        suspend fun connect(context: Context, device: BluetoothDevice): GattVolcanoLink {
+        /**
+         * Connects, finds the Volcano services, reads every value and enables notifications. With
+         * [autoConnect], waits (up to 10 minutes) for the device to turn up instead of failing fast.
+         */
+        suspend fun connect(context: Context, device: BluetoothDevice, autoConnect: Boolean = false): GattVolcanoLink {
             val link = GattVolcanoLink()
             try {
-                link.open(context.applicationContext, device)
+                link.open(context.applicationContext, device, autoConnect)
             } catch (t: Throwable) {
                 link.close()
                 throw t

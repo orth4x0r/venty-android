@@ -22,6 +22,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "GattLink"
 private const val CONNECT_TIMEOUT_MS = 12_000L
+/** A background (autoConnect) request waits for the device to come back; renewed after this. */
+private const val AUTO_CONNECT_TIMEOUT_MS = 10 * 60_000L
 private const val OP_TIMEOUT_MS = 3_000L
 
 /**
@@ -44,6 +46,7 @@ class GattLink private constructor() : VentyLink {
     private val opLock = Mutex()
     @Volatile private var pendingOp: CompletableDeferred<Int>? = null
     @Volatile private var closed = false
+    @Volatile private var lastRssi = 0
 
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
@@ -67,6 +70,11 @@ class GattLink private constructor() : VentyLink {
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            pendingOp?.complete(status)
+        }
+
+        override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
+            lastRssi = rssi
             pendingOp?.complete(status)
         }
 
@@ -99,12 +107,16 @@ class GattLink private constructor() : VentyLink {
         }
     }
 
-    private suspend fun open(context: Context, device: BluetoothDevice) {
-        gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+    private suspend fun open(context: Context, device: BluetoothDevice, autoConnect: Boolean) {
+        // autoConnect = true hands the request to the Bluetooth stack, which connects the moment
+        // the device advertises again, without scanning. Slower to start than a direct connect,
+        // so it's only used once the device has been gone a while.
+        gatt = device.connectGatt(context, autoConnect, callback, BluetoothDevice.TRANSPORT_LE)
             ?: throw LinkLostException("connectGatt returned null")
         // withTimeoutOrNull, not withTimeout: its exception is a CancellationException, which would
         // end the reconnect loop instead of triggering a retry.
-        withTimeoutOrNull(CONNECT_TIMEOUT_MS) { connected.await() } ?: throw LinkLostException("Connection timed out")
+        val timeout = if (autoConnect) AUTO_CONNECT_TIMEOUT_MS else CONNECT_TIMEOUT_MS
+        withTimeoutOrNull(timeout) { connected.await() } ?: throw LinkLostException("Connection timed out")
 
         // No high-priority request: a 500 ms poll doesn't need a 7.5 ms connection interval, and
         // the official app doesn't ask for one either.
@@ -137,6 +149,11 @@ class GattLink private constructor() : VentyLink {
         gatt.setCharacteristicNotification(control, true)
         val cccd = control.getDescriptor(VentyProtocol.CCCD_UUID) ?: return
         runOp("re-enable notifications") { writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) }
+    }
+
+    override suspend fun readRssi(): Int {
+        runOp("read RSSI") { gatt.readRemoteRssi() }
+        return lastRssi
     }
 
     /** BluetoothGatt.refresh() is hidden API but widely used to drop a stale service cache. */
@@ -178,11 +195,14 @@ class GattLink private constructor() : VentyLink {
         }
 
     companion object {
-        /** Connects, discovers the Venty service and enables notifications. Throws on failure. */
-        suspend fun connect(context: Context, device: BluetoothDevice): GattLink {
+        /**
+         * Connects, discovers the Venty service and enables notifications. Throws on failure. With
+         * [autoConnect], waits (up to 10 minutes) for the device to turn up instead of failing fast.
+         */
+        suspend fun connect(context: Context, device: BluetoothDevice, autoConnect: Boolean = false): GattLink {
             val link = GattLink()
             try {
-                link.open(context.applicationContext, device)
+                link.open(context.applicationContext, device, autoConnect)
             } catch (t: Throwable) {
                 link.close()
                 throw t

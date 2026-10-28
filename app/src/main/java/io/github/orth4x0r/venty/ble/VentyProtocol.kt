@@ -17,6 +17,7 @@ object VentyProtocol {
     const val CMD_STATUS: Byte = 0x01
     const val CMD_FIRMWARE: Byte = 0x02
     const val CMD_USAGE: Byte = 0x04
+    const val CMD_IDENTITY: Byte = 0x05
     const val CMD_DEVICE_SETTINGS: Byte = 0x06
     const val CMD_FIND_MY: Byte = 0x0D
 
@@ -25,6 +26,9 @@ object VentyProtocol {
     const val SETTING_ECO_CHARGE = 0x08
     const val SETTING_ECO_VOLTAGE = 0x20
     const val SETTING_BOOST_VISUALIZATION = 0x40
+
+    /** Settings2 flag (cmd 0x01, byte 16; write mask in byte 17): keep Bluetooth on while idle. */
+    const val SETTING2_BLE_PERMANENT = 0x01
 
     const val MIN_BRIGHTNESS = 1
     const val MAX_BRIGHTNESS = 9
@@ -52,6 +56,7 @@ object VentyProtocol {
     fun pollStatus(): ByteArray = packet(CMD_STATUS)
     fun readFirmware(): ByteArray = packet(CMD_FIRMWARE)
     fun readUsage(): ByteArray = packet(CMD_USAGE)
+    fun readIdentity(): ByteArray = packet(CMD_IDENTITY)
 
     /** [max] is the Venty's ceiling unless a Volcano (which goes higher) is on the other end. */
     fun setTarget(tenthsC: Int, max: Int = MAX_TARGET): ByteArray = packet(CMD_STATUS).also {
@@ -79,6 +84,16 @@ object VentyProtocol {
         it[1] = 0x80.toByte()
         it[14] = (if (enabled) bit else 0).toByte()
         it[15] = bit.toByte()
+    }
+
+    /**
+     * Turns "Bluetooth permanent" on or off: byte 16 holds the value, byte 17 the bit to change.
+     * The official app only offers this on a Veazy; whether a Venty honours it is unverified.
+     */
+    fun setBlePermanent(enabled: Boolean): ByteArray = packet(CMD_STATUS).also {
+        it[1] = 0x80.toByte()
+        it[16] = (if (enabled) SETTING2_BLE_PERMANENT else 0).toByte()
+        it[17] = SETTING2_BLE_PERMANENT.toByte()
     }
 
     fun readDeviceSettings(): ByteArray = ByteArray(SETTINGS_PACKET_SIZE).also { it[0] = CMD_DEVICE_SETTINGS }
@@ -128,6 +143,7 @@ object VentyProtocol {
             ecoChargeOptimization = flags and SETTING_ECO_CHARGE != 0,
             ecoVoltageLimit = flags and SETTING_ECO_VOLTAGE != 0,
             boostVisualization = flags and SETTING_BOOST_VISUALIZATION != 0,
+            blePermanent = if (data.size >= 17) data.u8(16) and SETTING2_BLE_PERMANENT != 0 else null,
         )
     }
 
@@ -160,6 +176,29 @@ object VentyProtocol {
                 (if (s.ecoVoltageLimit) SETTING_ECO_VOLTAGE else 0) or
                 (if (s.boostVisualization) SETTING_BOOST_VISUALIZATION else 0)
             ).toByte()
+        if (s.blePermanent == true) it[16] = SETTING2_BLE_PERMANENT.toByte()
+    }
+
+    /**
+     * Serial and body colour from a `0x05` response. The serial is the model prefix in bytes
+     * 15-16 followed by bytes 9-14; byte 18 is the colour index (the official app reads it on
+     * the Veazy only, so on a Venty it may be absent or always black).
+     */
+    fun parseIdentity(data: ByteArray): DeviceIdentity? {
+        if (data.size < 17 || data[0] != CMD_IDENTITY) return null
+        val ascii = (data.copyOfRange(15, 17) + data.copyOfRange(9, 15)).toString(Charsets.US_ASCII)
+        val serial = ascii.filter { it in '0'..'9' || it in 'A'..'Z' || it in 'a'..'z' }.ifEmpty { null }
+        val color = if (data.size > 18) DeviceColor.fromIndex(data.u8(18)) else null
+        return DeviceIdentity(serial, color)
+    }
+
+    /** The inverse of [parseIdentity], for the demo device and tests. */
+    fun encodeIdentity(serial: String, color: DeviceColor): ByteArray = ByteArray(PACKET_SIZE).also {
+        it[0] = CMD_IDENTITY
+        val bytes = serial.padEnd(8, '0').toByteArray(Charsets.US_ASCII)
+        for (i in 0 until 2) it[15 + i] = bytes[i]
+        for (i in 0 until 6) it[9 + i] = bytes[2 + i]
+        it[18] = color.index.toByte()
     }
 
     /** Firmware version string from a `0x02` response, e.g. "V01.11". */
@@ -208,6 +247,8 @@ data class VentyStatus(
     val ecoChargeOptimization: Boolean = false,
     val ecoVoltageLimit: Boolean = false,
     val boostVisualization: Boolean = false,
+    /** "Bluetooth permanent" (settings2 bit 0), or null when the packet is too short to carry it. */
+    val blePermanent: Boolean? = null,
 ) {
     /** What the heater is actually aiming for, including any active boost. The Venty tops out at 210 °C. */
     val effectiveTargetTenths: Int
@@ -229,6 +270,18 @@ data class DeviceSettings(
     /** Permanent boost: boost and superboost no longer end after about 90 s. */
     val boostTimeoutDisabled: Boolean,
 )
+
+/** Body colours, by the index the device reports in its identity packet. */
+enum class DeviceColor(val index: Int) {
+    Black(1), Blue(2), Pink(3), Orange(4);
+
+    companion object {
+        /** As the official app does: 2, 3 and 4 are colours, anything else is black. */
+        fun fromIndex(index: Int): DeviceColor = entries.firstOrNull { it.index == index && it != Black } ?: Black
+    }
+}
+
+data class DeviceIdentity(val serial: String?, val color: DeviceColor?)
 
 internal fun ByteArray.u8(i: Int): Int = this[i].toInt() and 0xFF
 internal fun ByteArray.u16(i: Int): Int = u8(i) or (u8(i + 1) shl 8)
