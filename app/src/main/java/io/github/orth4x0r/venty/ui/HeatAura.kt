@@ -70,7 +70,7 @@ private object AuraShader {
         uniform float2 res;
         uniform float time;
         uniform float level;
-        uniform half4 tint;
+        layout(color) uniform half4 tint;
 
         float hash(float2 p) { return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
         float noise(float2 p) {
