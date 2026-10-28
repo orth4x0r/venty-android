@@ -406,6 +406,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             history = history,
                             fahrenheit = status?.fahrenheit == true,
                             onBack = { closePage() },
+                            range = kind.targetRange,
                         )
                         Page.Main -> Column(
                             Modifier

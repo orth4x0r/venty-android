@@ -588,34 +588,39 @@ private fun formatDraw(ms: Long): String =
     if (ms >= 60_000L) "%d:%02d".format(ms / 60_000L, (ms % 60_000L) / 1000L) else "%.1f s".format(Locale.US, ms / 1000.0)
 
 
-/** "Your October, wrapped": a shimmering banner that opens the month-in-review story. */
+/**
+ * The way into the month's recap: the month's own numbers on a plain card, so it reads as part
+ * of History rather than an ad. The figures shimmer to say there's a show behind it.
+ */
 @Composable
 private fun WrappedTeaser(history: List<SessionRecord>, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val month = remember(history) {
-        history.firstOrNull()?.let { java.time.Instant.ofEpochMilli(it.startMs).atZone(ZoneId.systemDefault()).month }
+    val zone = remember { ZoneId.systemDefault() }
+    val w = remember(history) {
+        history.firstOrNull()?.let {
+            io.github.orth4x0r.venty.session.wrappedFor(history, java.time.YearMonth.from(java.time.Instant.ofEpochMilli(it.startMs).atZone(zone)), zone)
+        }
     } ?: return
-    val name = month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
+    val name = w.month.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
     val shimmer = io.github.orth4x0r.venty.ui.shimmerBrush(listOf(VentyColors.Heat, VentyColors.Ember), enabled = true)
+    val figure = MaterialTheme.typography.headlineSmall.let { st -> shimmer?.let { st.copy(brush = it) } ?: st.copy(color = VentyColors.Heat) }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
             .clip(io.github.orth4x0r.venty.ui.theme.VentyShapes.Large)
-            .background(
-                androidx.compose.ui.graphics.Brush.linearGradient(
-                    listOf(VentyColors.Heat.copy(alpha = 0.35f), VentyColors.SuperBoost.copy(alpha = 0.25f)),
-                ),
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 18.dp),
+            .background(VentyColors.Surface.copy(alpha = 0.82f))
+            .clickable(onClickLabel = "Open $name in numbers", onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 16.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                "Your $name, wrapped",
-                style = MaterialTheme.typography.titleLarge.let { st -> shimmer?.let { st.copy(brush = it) } ?: st },
-            )
-            Text("Sessions, puffs, your go-to temp and more", style = MaterialTheme.typography.bodySmall, color = VentyColors.OnSurface.copy(alpha = 0.75f))
+            Text("$name in numbers", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("${w.sessions}", style = figure)
+                Text(if (w.sessions == 1) " session  " else " sessions  ", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
+                Text("${w.puffs}", style = figure)
+                Text(if (w.puffs == 1) " puff" else " puffs", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
+            }
         }
-        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null)
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = VentyColors.Muted)
     }
 }

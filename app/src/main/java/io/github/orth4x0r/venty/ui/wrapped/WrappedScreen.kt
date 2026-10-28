@@ -78,16 +78,23 @@ import java.util.Locale
 
 private const val CARD_MS = 5_500
 
-/** Each story card has its own colour, so the recap feels like it changes rooms as you tap. */
-private enum class Card(val tint: () -> Color) {
-    Intro({ VentyColors.Heat }),
-    Sessions({ VentyColors.Ember }),
-    Puffs({ VentyColors.Ready }),
-    Time({ VentyColors.Cool }),
-    Temp({ VentyColors.Boost }),
-    Rhythm({ VentyColors.SuperBoost }),
-    Streak({ VentyColors.Warning }),
-    Outro({ VentyColors.Heat }),
+/**
+ * The story heats up as it goes: each card is a step further along ember, heat, boost red and
+ * superboost pink, the same climb the dial makes, and the last card cools back to plain heat.
+ * The ready green and cool blue stay out of it, since on the dashboard they mean a state.
+ */
+private enum class Card {
+    Intro, Sessions, Puffs, Time, Temp, Rhythm, Streak, Outro;
+
+    val tint: () -> Color
+        get() = { if (this == Outro) VentyColors.Heat else heatAt(ordinal / (entries.size - 2f)) }
+}
+
+private fun heatAt(f: Float): Color {
+    val stops = listOf(VentyColors.Ember, VentyColors.Heat, VentyColors.Boost, VentyColors.SuperBoost)
+    val x = f.coerceIn(0f, 1f) * (stops.size - 1)
+    val i = x.toInt().coerceAtMost(stops.size - 2)
+    return androidx.compose.ui.graphics.lerp(stops[i], stops[i + 1], x - i)
 }
 
 /**
@@ -96,7 +103,13 @@ private enum class Card(val tint: () -> Color) {
  * has its own colour wash, drifting embers and a number that rolls up as it lands.
  */
 @Composable
-fun WrappedScreen(history: List<SessionRecord>, fahrenheit: Boolean, onBack: () -> Unit) {
+fun WrappedScreen(
+    history: List<SessionRecord>,
+    fahrenheit: Boolean,
+    onBack: () -> Unit,
+    /** The device's target range in tenths of °C, for where the favourite sits on its arc. */
+    range: IntRange = 400..2100,
+) {
     val months = remember(history) { wrappedMonths(history) }
     var month by remember { mutableStateOf(months.firstOrNull() ?: YearMonth.now()) }
     val wrapped = remember(history, month) { wrappedFor(history, month) }
@@ -178,7 +191,7 @@ fun WrappedScreen(history: List<SessionRecord>, fahrenheit: Boolean, onBack: () 
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             ) { c ->
                 Box(Modifier.fillMaxSize().padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-                    CardContent(c, wrapped, fahrenheit, months, onMonth = { month = it })
+                    CardContent(c, wrapped, history, fahrenheit, range, months, onMonth = { month = it })
                 }
             }
         }
@@ -186,12 +199,20 @@ fun WrappedScreen(history: List<SessionRecord>, fahrenheit: Boolean, onBack: () 
 }
 
 @Composable
-private fun CardContent(card: Card, w: Wrapped, fahrenheit: Boolean, months: List<YearMonth>, onMonth: (YearMonth) -> Unit) {
+private fun CardContent(
+    card: Card,
+    w: Wrapped,
+    history: List<SessionRecord>,
+    fahrenheit: Boolean,
+    range: IntRange,
+    months: List<YearMonth>,
+    onMonth: (YearMonth) -> Unit,
+) {
     val tint = card.tint()
     val monthName = w.month.month.getDisplayName(TextStyle.FULL, Locale.getDefault())
     when (card) {
-        Card.Intro -> Story(kicker = "Your", big = null, title = "$monthName, wrapped", body = "Tap to go on. Hold to pause.", tint = tint) {
-            PulsingFlame(tint)
+        Card.Intro -> Story(kicker = "${w.month.year}", big = null, title = "$monthName in numbers", body = "Tap for the next one, hold to pause.", tint = tint) {
+            MonthDots(history, w.month, tint)
         }
         Card.Sessions -> Story(
             kicker = "You fired it up",
@@ -200,7 +221,7 @@ private fun CardContent(card: Card, w: Wrapped, fahrenheit: Boolean, months: Lis
             body = w.sessionsChangePercent?.let { p ->
                 when {
                     p > 0 -> "That's $p % more than the month before."
-                    p < 0 -> "That's ${-p} % fewer than the month before. Pacing yourself."
+                    p < 0 -> "That's ${-p} % fewer than the month before."
                     else -> "Exactly as many as the month before."
                 }
             } ?: "Your first month on record.",
@@ -228,14 +249,10 @@ private fun CardContent(card: Card, w: Wrapped, fahrenheit: Boolean, months: Lis
             kicker = "Your go-to temperature",
             big = Temperature.toDisplay(w.favoriteTenths, fahrenheit),
             title = "°" + Temperature.unit(fahrenheit),
-            body = when {
-                w.favoriteTenths <= 1800 -> "Flavour chaser."
-                w.favoriteTenths <= 1950 -> "Right in the sweet spot."
-                else -> "Clouds first, questions later."
-            },
+            body = "Where you set it most, to the nearest 5°.",
             tint = tint,
         ) {
-            TempArc(w.favoriteTenths, tint)
+            TempArc(w.favoriteTenths, range, tint)
         }
         Card.Rhythm -> Story(
             kicker = "Mostly in the",
@@ -256,10 +273,13 @@ private fun CardContent(card: Card, w: Wrapped, fahrenheit: Boolean, months: Lis
         Card.Outro -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text("That was $monthName", style = MaterialTheme.typography.headlineMedium, color = tint)
             Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Stat("${w.sessions}", "sessions", Modifier.weight(1f))
-                Stat("${w.puffs}", "puffs", Modifier.weight(1f))
-                Stat("${Temperature.toDisplay(w.favoriteTenths, fahrenheit)}°", "favourite", Modifier.weight(1f))
+            // One line of figures, the way the dashboard reads a live session.
+            Row(verticalAlignment = Alignment.Bottom) {
+                Stat("${w.sessions}", if (w.sessions == 1) " session" else " sessions")
+                Dot()
+                Stat("${w.puffs}", if (w.puffs == 1) " puff" else " puffs")
+                Dot()
+                Stat("${Temperature.toDisplay(w.favoriteTenths, fahrenheit)}°", " usual")
             }
             if (months.size > 1) {
                 Spacer(Modifier.height(28.dp))
@@ -271,7 +291,7 @@ private fun CardContent(card: Card, w: Wrapped, fahrenheit: Boolean, months: Lis
                             m.month.getDisplayName(TextStyle.SHORT, Locale.getDefault()),
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier
-                                .clip(VentyShapes.Pill)
+                                .clip(VentyShapes.Small)
                                 .background(Color.White.copy(alpha = 0.1f))
                                 .clickable { onMonth(m) }
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -319,14 +339,14 @@ private fun Story(
 }
 
 @Composable
-private fun Stat(value: String, label: String, modifier: Modifier) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.clip(VentyShapes.Small).background(Color.White.copy(alpha = 0.06f)).padding(vertical = 14.dp),
-    ) {
-        Text(value, style = MaterialTheme.typography.headlineSmall)
-        Text(label, style = MaterialTheme.typography.labelMedium, color = VentyColors.Muted)
-    }
+private fun Stat(value: String, label: String) {
+    Text(value, style = MaterialTheme.typography.headlineSmall)
+    Text(label, style = MaterialTheme.typography.bodyMedium, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
+}
+
+@Composable
+private fun Dot() {
+    Text("·", style = MaterialTheme.typography.headlineSmall, color = VentyColors.Muted, modifier = Modifier.padding(horizontal = 10.dp))
 }
 
 /** A colour wash that slowly swirls behind the card. */
@@ -353,27 +373,56 @@ private fun StoryBackdrop(tint: Color) {
     }
 }
 
+/**
+ * The month as a ring of days, starting at the top: days with a session light up one after
+ * another in the card's colour, the rest stay as faint ticks, so a busy month reads at a glance.
+ */
 @Composable
-private fun PulsingFlame(tint: Color) {
-    val t = rememberInfiniteTransition(label = "flame")
-    val s by t.animateFloat(0.92f, 1.08f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "flameScale")
-    Canvas(Modifier.size(120.dp).graphicsLayer { scaleX = s; scaleY = s }) {
-        drawCircle(Brush.radialGradient(listOf(Color.White, tint, Color.Transparent)), radius = size.minDimension / 2)
+private fun MonthDots(history: List<SessionRecord>, month: YearMonth, tint: Color) {
+    val active = remember(history, month) {
+        val zone = java.time.ZoneId.systemDefault()
+        history.mapNotNull { r ->
+            val d = java.time.Instant.ofEpochMilli(r.startMs).atZone(zone).toLocalDate()
+            if (YearMonth.from(d) == month) d.dayOfMonth else null
+        }.toSet()
+    }
+    val days = month.lengthOfMonth()
+    val lit = remember(month) { Animatable(0f) }
+    LaunchedEffect(month) { lit.animateTo(days.toFloat(), tween(1200, delayMillis = 200, easing = FastOutSlowInEasing)) }
+    val t = rememberInfiniteTransition(label = "monthDots")
+    val glow by t.animateFloat(0.6f, 1f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "monthGlow")
+    Canvas(Modifier.size(150.dp)) {
+        val c = Offset(size.width / 2, size.height / 2)
+        val r = size.minDimension / 2 * 0.82f
+        val dot = 4.dp.toPx()
+        for (day in 1..days) {
+            val a = (2 * Math.PI * (day - 1) / days - Math.PI / 2).toFloat()
+            val p = Offset(c.x + kotlin.math.cos(a) * r, c.y + kotlin.math.sin(a) * r)
+            // How far the lighting sweep has got past this day, 0 to 1.
+            val on = (lit.value - (day - 1)).coerceIn(0f, 1f)
+            if (day in active && on > 0f) {
+                drawCircle(tint.copy(alpha = 0.35f * on * glow), radius = dot * 2.6f, center = p)
+                drawCircle(tint, radius = dot * (0.6f + 0.4f * on), center = p)
+            } else {
+                drawCircle(Color.White.copy(alpha = 0.16f), radius = dot * 0.55f, center = p)
+            }
+        }
     }
 }
 
-/** Where the favourite temperature sits on the Venty's 40-210 °C range. */
+/** Where the favourite temperature sits on the device's range. */
 @Composable
-private fun TempArc(tenths: Int, tint: Color) {
+private fun TempArc(tenths: Int, range: IntRange, tint: Color) {
     val sweep = remember { Animatable(0f) }
-    LaunchedEffect(tenths) { sweep.animateTo(((tenths - 400f) / 1700f).coerceIn(0f, 1f), tween(1100, delayMillis = 150, easing = FastOutSlowInEasing)) }
+    val span = (range.last - range.first).coerceAtLeast(1).toFloat()
+    LaunchedEffect(tenths) { sweep.animateTo(((tenths - range.first) / span).coerceIn(0f, 1f), tween(1100, delayMillis = 150, easing = FastOutSlowInEasing)) }
     Canvas(Modifier.size(180.dp)) {
         val stroke = 14.dp.toPx()
         val inset = stroke / 2
         val arcSize = Size(size.width - stroke, size.height - stroke)
         drawArc(Color.White.copy(alpha = 0.1f), 135f, 270f, false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
         drawArc(
-            Brush.sweepGradient(listOf(VentyColors.Cool, VentyColors.Heat, tint, VentyColors.Cool)),
+            Brush.sweepGradient(listOf(VentyColors.Ember, VentyColors.Heat, tint, VentyColors.Ember)),
             135f, 270f * sweep.value, false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Round),
         )
     }
