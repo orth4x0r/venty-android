@@ -16,9 +16,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.orth4x0r.venty.R
 
 object VentyColors {
     val Background = Color(0xFF0F0D0C)
@@ -63,10 +67,34 @@ private fun colors() = darkColorScheme(
     error = VentyColors.Boost,
 )
 
+/**
+ * Two corner sizes and a pill, instead of a radius picked per component: [Small] for chips and
+ * buttons, [Large] for the few cards that group related things.
+ */
+object VentyShapes {
+    val Small = RoundedCornerShape(12.dp)
+    val Large = RoundedCornerShape(24.dp)
+    val Pill = RoundedCornerShape(50)
+}
+
+/**
+ * Barlow Condensed for figures: the dial, batteries, counts. A narrow DIN-like face reads as a
+ * gauge rather than a web page, and tabular digits keep rolling numbers from jumping sideways.
+ * Body text stays on the system face.
+ */
+val GaugeFont = FontFamily(
+    Font(R.font.barlow_condensed_medium, FontWeight.Medium),
+    Font(R.font.barlow_condensed_semibold, FontWeight.SemiBold),
+)
+
+private const val TABULAR = "tnum"
+
 private val base = Typography()
 private val typography = base.copy(
-    displayLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Light, fontSize = 84.sp, letterSpacing = (-3).sp),
-    headlineMedium = base.headlineMedium.copy(fontWeight = FontWeight.Medium),
+    displayLarge = TextStyle(fontFamily = GaugeFont, fontWeight = FontWeight.Medium, fontSize = 96.sp, lineHeight = 96.sp, letterSpacing = (-1).sp, fontFeatureSettings = TABULAR),
+    displaySmall = base.displaySmall.copy(fontFamily = GaugeFont, fontWeight = FontWeight.Medium, fontSize = 44.sp, fontFeatureSettings = TABULAR),
+    headlineMedium = base.headlineMedium.copy(fontFamily = GaugeFont, fontWeight = FontWeight.Medium),
+    headlineSmall = base.headlineSmall.copy(fontFamily = GaugeFont, fontWeight = FontWeight.SemiBold, fontFeatureSettings = TABULAR),
     titleLarge = base.titleLarge.copy(fontWeight = FontWeight.SemiBold),
     labelLarge = base.labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp),
 )

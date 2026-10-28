@@ -64,6 +64,7 @@ import io.github.orth4x0r.venty.ble.VentyProtocol
 import io.github.orth4x0r.venty.ble.VentyStatus
 import io.github.orth4x0r.venty.ui.enterFromBelow
 import io.github.orth4x0r.venty.ui.theme.VentyColors
+import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlin.math.roundToInt
 
 /** Preferences that live on the phone, not the device. */
@@ -317,23 +318,21 @@ private fun brightnessLabel(kind: DeviceKind, level: Int): String =
 @Composable
 private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.2.sp),
-        color = VentyColors.Ember,
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        color = VentyColors.Muted,
         modifier = modifier.padding(start = 8.dp, top = 24.dp, bottom = 8.dp),
     )
 }
 
 @Composable
 private fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    val shape = RoundedCornerShape(24.dp)
     Column(
         modifier
             .fillMaxWidth()
-            .clip(shape)
+            .clip(VentyShapes.Large)
             // Mostly opaque: lighter cards went muddy while the page crossfades with the dashboard.
-            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh.copy(alpha = 0.86f), VentyColors.Surface.copy(alpha = 0.86f))))
-            .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)), shape),
+            .background(VentyColors.Surface.copy(alpha = 0.86f)),
         content = content,
     )
 }
@@ -343,28 +342,16 @@ private fun RowDivider() {
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(start = 68.dp, end = 16.dp)
+            .padding(start = 54.dp, end = 16.dp)
             .height(1.dp)
             .background(Color.White.copy(alpha = 0.06f)),
     )
 }
 
+/** A bare line icon: the switch already shows on and off, so the icon doesn't light up too. */
 @Composable
-private fun IconBadge(icon: ImageVector, active: Boolean) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(if (active) VentyColors.Heat.copy(alpha = 0.18f) else VentyColors.Track.copy(alpha = 0.6f)),
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = if (active) VentyColors.Heat else VentyColors.Muted,
-            modifier = Modifier.size(20.dp),
-        )
-    }
+private fun IconBadge(icon: ImageVector) {
+    Icon(icon, contentDescription = null, tint = VentyColors.Muted, modifier = Modifier.size(22.dp))
 }
 
 @Composable
@@ -394,7 +381,7 @@ private fun SwitchRow(
             .padding(horizontal = 16.dp, vertical = 14.dp)
             .alpha(if (enabled) 1f else 0.5f),
     ) {
-        IconBadge(icon, active = checked && enabled)
+        IconBadge(icon)
         Spacer(Modifier.width(16.dp))
         RowText(
             title = title,
@@ -446,7 +433,7 @@ private fun SliderRow(
             .alpha(if (enabled) 1f else 0.5f),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconBadge(icon, active = enabled)
+            IconBadge(icon)
             Spacer(Modifier.width(16.dp))
             RowText(
                 title = title,
@@ -507,7 +494,7 @@ private fun InfoRow(label: String, value: String) {
 
 @Composable
 private fun FindMyButton(enabled: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = VentyShapes.Small
     Column(
         Modifier
             .fillMaxWidth()
@@ -521,7 +508,6 @@ private fun FindMyButton(enabled: Boolean, onClick: () -> Unit) {
                 .alpha(if (enabled) 1f else 0.5f)
                 .clip(shape)
                 .background(VentyColors.Heat.copy(alpha = 0.16f))
-                .border(1.dp, VentyColors.Heat.copy(alpha = 0.4f), shape)
                 .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         ) {
             Text("Find my Venty", style = MaterialTheme.typography.labelLarge, color = VentyColors.Ember)

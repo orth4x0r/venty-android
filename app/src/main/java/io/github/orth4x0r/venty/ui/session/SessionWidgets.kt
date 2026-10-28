@@ -102,10 +102,11 @@ import androidx.compose.ui.unit.sp
 import io.github.orth4x0r.venty.session.LiveSession
 import io.github.orth4x0r.venty.ui.RollingNumber
 import io.github.orth4x0r.venty.ui.theme.VentyColors
+import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Session timer, puff count and heat-up ETA as three chips. Hidden while there is no session. */
+/** Session timer, puff count and, while heating up, the ETA, on one line. Hidden with no session. */
 @Composable
 fun LiveSessionStrip(live: LiveSession?, modifier: Modifier = Modifier) {
     // Keep the last session around so the strip can animate out with content still in it.
@@ -132,79 +133,62 @@ private fun SessionChips(live: LiveSession) {
         }
     }
     val elapsed = ((nowMs - live.startMs) / 1000L).coerceAtLeast(0L)
-    val timer = "%02d:%02d".format(elapsed / 60, elapsed % 60)
+    val timer = "%d:%02d".format(elapsed / 60, elapsed % 60)
+    // Once it's up to temperature the dial says so; the ETA only matters on the way there.
+    val eta = live.etaSeconds.takeIf { live.heatUpSeconds == null }
 
-    val ready = live.heatUpSeconds != null || live.etaSeconds == null
-    val eta = if (ready) "Ready" else "~${live.etaSeconds} s"
-
+    val figure = MaterialTheme.typography.headlineSmall
+    val caption = MaterialTheme.typography.bodyMedium
     Row(
         Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.Bottom,
     ) {
-        Chip("SESSION", Modifier.weight(1f)) {
-            Text(timer, style = MaterialTheme.typography.titleLarge, color = VentyColors.OnSurface)
-        }
-        PuffChip(live.puffs, Modifier.weight(1f))
-        Chip("HEAT-UP", Modifier.weight(1f)) {
-            Text(
-                eta,
-                style = MaterialTheme.typography.titleLarge,
-                color = if (ready) VentyColors.Ready else VentyColors.Warning,
-            )
+        Text(timer, style = figure, color = VentyColors.OnSurface)
+        Separator()
+        PuffCount(live.puffs, figure)
+        Text(if (live.puffs == 1) " puff" else " puffs", style = caption, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
+        if (eta != null) {
+            Separator()
+            Text("~$eta s", style = figure, color = VentyColors.Warning)
+            Text(" to temp", style = caption, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
         }
     }
 }
 
 @Composable
-private fun Chip(
-    label: String,
-    modifier: Modifier = Modifier,
-    glow: () -> Float = { 0f },
-    value: @Composable () -> Unit,
-) {
-    val shape = RoundedCornerShape(16.dp)
-    Column(
-        modifier
-            .background(VentyColors.SurfaceHigh, shape)
-            .drawBehind {
-                val g = glow()
-                if (g > 0.001f) {
-                    drawRoundRect(VentyColors.Heat.copy(alpha = 0.35f * g), cornerRadius = CornerRadius(16.dp.toPx()))
-                }
-            }
-            .border(1.dp, VentyColors.Track, shape)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted, letterSpacing = 1.sp)
-        Box(Modifier.padding(top = 2.dp)) { value() }
-    }
+private fun Separator() {
+    Text(
+        "·",
+        style = MaterialTheme.typography.headlineSmall,
+        color = VentyColors.Muted.copy(alpha = 0.6f),
+        modifier = Modifier.padding(horizontal = 10.dp),
+    )
 }
 
+/** The puff count jumps and flashes white-hot each time it goes up. */
 @Composable
-private fun PuffChip(puffs: Int, modifier: Modifier = Modifier) {
+private fun PuffCount(puffs: Int, style: androidx.compose.ui.text.TextStyle) {
     val scale = remember { Animatable(1f) }
-    val glow = remember { Animatable(0f) }
+    val flash = remember { Animatable(0f) }
     var previous by remember { mutableIntStateOf(puffs) }
     LaunchedEffect(puffs) {
         if (puffs > previous) {
             launch {
-                scale.animateTo(1.3f, tween(90))
+                scale.animateTo(1.35f, tween(90))
                 scale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
             }
-            glow.snapTo(1f)
-            glow.animateTo(0f, tween(800, easing = FastOutSlowInEasing))
+            flash.snapTo(1f)
+            flash.animateTo(0f, tween(800, easing = FastOutSlowInEasing))
         }
         previous = puffs
     }
-    Chip("PUFFS", modifier, glow = { glow.value }) {
-        RollingNumber(
-            value = puffs,
-            style = MaterialTheme.typography.titleLarge,
-            color = VentyColors.Heat,
-            modifier = Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value },
-        )
-    }
+    RollingNumber(
+        value = puffs,
+        style = style.copy(shadow = androidx.compose.ui.graphics.Shadow(VentyColors.Heat.copy(alpha = flash.value), blurRadius = 24f)),
+        color = androidx.compose.ui.graphics.lerp(VentyColors.Heat, Color.White, 0.6f * flash.value),
+        modifier = Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value },
+    )
 }
 
 /** A soft pulsing "Inhaling…" pill. Fades away when [active] is false. */
@@ -464,7 +448,7 @@ private fun DoneCard(r: SessionRecord, fahrenheit: Boolean, onDismiss: () -> Uni
     }
     val peak = "${Temperature.toDisplay(r.maxTargetTenths, fahrenheit)}°${Temperature.unit(fahrenheit)}"
 
-    val shape = RoundedCornerShape(24.dp)
+    val shape = VentyShapes.Large
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -512,20 +496,7 @@ private fun DoneCard(r: SessionRecord, fahrenheit: Boolean, onDismiss: () -> Uni
             .padding(horizontal = 18.dp, vertical = 16.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("SESSION DONE", style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted, letterSpacing = 1.5.sp)
-                if (r.boosted) {
-                    Row(
-                        Modifier
-                            .background(VentyColors.Boost.copy(alpha = 0.16f), RoundedCornerShape(50))
-                            .padding(horizontal = 7.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Rounded.Bolt, contentDescription = null, tint = VentyColors.Boost, modifier = Modifier.size(12.dp))
-                        Text("Boosted", style = MaterialTheme.typography.labelSmall, color = VentyColors.Boost)
-                    }
-                }
-            }
+            Text("Session done", style = MaterialTheme.typography.titleSmall, color = VentyColors.Muted)
             Row(verticalAlignment = Alignment.Bottom) {
                 RollingNumber(puffs, MaterialTheme.typography.displaySmall, VentyColors.Heat)
                 Text(
@@ -535,9 +506,9 @@ private fun DoneCard(r: SessionRecord, fahrenheit: Boolean, onDismiss: () -> Uni
                     modifier = Modifier.padding(start = 6.dp, bottom = 6.dp),
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                DoneStat(Icons.Rounded.Timer, duration)
-                DoneStat(Icons.Rounded.Thermostat, "peak $peak")
+            Row {
+                Text("$duration · peak $peak", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
+                if (r.boosted) Text(" · boosted", style = MaterialTheme.typography.bodySmall, color = VentyColors.Boost)
             }
         }
         Spacer(Modifier.width(12.dp))
@@ -549,16 +520,6 @@ private fun DoneCard(r: SessionRecord, fahrenheit: Boolean, onDismiss: () -> Uni
     }
 }
 
-@Composable
-private fun DoneStat(icon: ImageVector, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = VentyColors.Muted, modifier = Modifier.size(14.dp))
-        Spacer(Modifier.width(4.dp))
-        Text(text, style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
-    }
-}
-
-/** A ring in the cool colour that drains clockwise as [left] runs from 1 to 0. */
 @Composable
 private fun CoolDownRing(left: () -> Float, secondsLeft: Int, modifier: Modifier = Modifier) {
     Box(contentAlignment = Alignment.Center, modifier = modifier) {

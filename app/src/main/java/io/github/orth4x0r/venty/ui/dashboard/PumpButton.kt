@@ -50,6 +50,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import io.github.orth4x0r.venty.ui.pressScale
 import io.github.orth4x0r.venty.ui.theme.VentyColors
+import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 
@@ -85,7 +86,7 @@ internal fun PumpButton(on: Boolean, onToggle: (Boolean) -> Unit) {
         }
     }
 
-    val shape = RoundedCornerShape(24.dp)
+    val shape = VentyShapes.Large
     Row(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,

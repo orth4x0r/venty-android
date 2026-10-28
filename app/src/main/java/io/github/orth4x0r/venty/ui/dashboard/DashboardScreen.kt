@@ -170,6 +170,7 @@ import io.github.orth4x0r.venty.ble.VentyController
 import io.github.orth4x0r.venty.ble.VentyStatus
 import io.github.orth4x0r.venty.ui.Temperature
 import io.github.orth4x0r.venty.ui.theme.VentyColors
+import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -515,7 +516,7 @@ private fun HeatHairline(s: VentyStatus?, live: LiveSession?, tint: () -> Color)
                 .fillMaxWidth()
                 .padding(top = 2.dp, bottom = 6.dp)
                 .height(2.dp)
-                .clip(RoundedCornerShape(50))
+                .clip(VentyShapes.Pill)
                 .drawWithCache {
                     val color = tint()
                     val track = color.copy(alpha = 0.14f)
@@ -610,6 +611,9 @@ private fun Dashboard(
     val view = LocalView.current
     val unit = Temperature.unit(f)
     val phase = HeaterPhase.of(s)
+    // The controls follow the dial's colour, so superboost is pink everywhere rather than pink on
+    // the dial and orange underneath. With the heater off they stay heat-coloured, as the way in.
+    val accent by animateColorAsState(if (phase == HeaterPhase.Off) VentyColors.Heat else phase.color, tween(600), label = "accent")
 
     // A firm buzz the moment the Venty reaches temperature.
     val haptics = LocalHapticFeedback.current
@@ -693,7 +697,8 @@ private fun Dashboard(
                 dragDisplay != null -> "Set to"
                 current != null -> "Now"
                 !heating -> "Target"
-                s.setpointReached -> "Ready at"
+                // The pill already says Ready.
+                s.setpointReached -> "Holding"
                 else -> "Heating to"
             },
             style = MaterialTheme.typography.labelLarge,
@@ -729,13 +734,12 @@ private fun Dashboard(
         }
     }
 
-    LiveSessionStrip(live, Modifier.padding(bottom = 12.dp))
-    Box(Modifier.enterFromBelow(80, intro)) { TargetCard(s, kind, onTarget) }
-    Spacer(Modifier.height(2.dp))
-    Box(Modifier.enterFromBelow(120, intro)) { PresetsRow(presets, s, onTarget, onAddPreset, onRemovePreset) }
-    Spacer(Modifier.height(6.dp))
+    LiveSessionStrip(live, Modifier.padding(bottom = 4.dp))
+    Box(Modifier.enterFromBelow(80, intro)) { TargetStepper(s, kind, accent, onTarget) }
+    Box(Modifier.enterFromBelow(120, intro)) { PresetsRow(presets, s, accent, onTarget, onAddPreset, onRemovePreset) }
+    Spacer(Modifier.height(4.dp))
     Box(Modifier.enterFromBelow(160, intro)) {
-        HeaterButton(on = s.heaterMode.isHeating, onToggle = { at ->
+        HeaterButton(on = s.heaterMode.isHeating, accent = accent, onToggle = { at ->
             val turningOn = !s.heaterMode.isHeating
             // The shockwave takes the colour of the phase being entered.
             onShockwave(at, if (turningOn) VentyColors.Heat else VentyColors.Cool)
@@ -747,14 +751,11 @@ private fun Dashboard(
         Box(Modifier.enterFromBelow(200, intro)) { PumpButton(pump, onPump) }
     }
     if (kind.hasBoost) {
-        AnimatedVisibility(visible = s.heaterMode.isHeating, enter = expandVertically(), exit = shrinkVertically()) {
-            Column {
-                Spacer(Modifier.height(12.dp))
-                BoostSelector(s, onMode)
-            }
-        }
+        // Always in the same place, so a thumb can find it; it only works while heating.
+        Spacer(Modifier.height(12.dp))
+        Box(Modifier.enterFromBelow(200, intro)) { BoostSelector(s, enabled = s.heaterMode.isHeating, onMode = onMode) }
     }
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(24.dp))
     Box(Modifier.enterFromBelow(220, intro)) {
         RampCard(
             run = ramp,
@@ -769,16 +770,19 @@ private fun Dashboard(
             onRemoveProfile = onRemoveRampProfile,
         )
     }
-    if (kind.hasBoost) {
-        Spacer(Modifier.height(16.dp))
-        Box(Modifier.enterFromBelow(240, intro)) { BoostOffsetsCard(s, onBoost, onSuperBoost) }
-    }
+    // Set-and-forget things live below the controls, under their own heading.
+    Spacer(Modifier.height(32.dp))
+    Text(
+        "Device",
+        style = MaterialTheme.typography.titleSmall,
+        color = VentyColors.Muted,
+        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp).enterFromBelow(240, intro),
+    )
     if (kind.hasBattery) {
+        Box(Modifier.enterFromBelow(260, intro)) { BatteryCard(s, batterySamples, history, live) }
         Spacer(Modifier.height(16.dp))
-        Box(Modifier.enterFromBelow(280, intro)) { BatteryCard(s, batterySamples, history, live) }
     }
-    Spacer(Modifier.height(16.dp))
-    Column(Modifier.enterFromBelow(320, intro)) { InfoRow(s, info, lifetimePuffs, kind) }
+    Box(Modifier.enterFromBelow(280, intro)) { DeviceCard(s, info, lifetimePuffs, kind, onBoost, onSuperBoost) }
 }
 
 private enum class HeaterPhase(val label: String) {
@@ -817,6 +821,7 @@ private enum class HeaterPhase(val label: String) {
 private fun PresetsRow(
     presets: List<Preset>,
     s: VentyStatus,
+    accent: Color,
     onApply: (Int) -> Unit,
     onAdd: (Preset) -> Unit,
     onRemove: (Preset) -> Unit,
@@ -846,8 +851,8 @@ private fun PresetsRow(
     ) {
         items(keyed, key = { it.first }) { (id, p) ->
             val selected = p.tenthsC == s.targetTenths
-            val bg by animateColorAsState(if (selected) VentyColors.Heat.copy(alpha = 0.22f) else VentyColors.Surface, label = "presetBg")
-            val border by animateColorAsState(if (selected) VentyColors.Heat else Color.White.copy(alpha = 0.08f), label = "presetBorder")
+            val bg by animateColorAsState(if (selected) accent.copy(alpha = 0.22f) else VentyColors.Surface, label = "presetBg")
+            val border by animateColorAsState(if (selected) accent else Color.White.copy(alpha = 0.08f), label = "presetBorder")
             val glow by animateFloatAsState(if (selected) 1f else 0f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessLow), label = "presetGlow")
             val pop = remember { Animatable(if (id in popped) 1f else 0.6f) }
             LaunchedEffect(Unit) {
@@ -870,19 +875,19 @@ private fun PresetsRow(
                             val spread = 10.dp.toPx()
                             drawRoundRect(
                                 Brush.radialGradient(
-                                    listOf(VentyColors.Heat.copy(alpha = 0.5f * g * breathe), Color.Transparent),
+                                    listOf(accent.copy(alpha = 0.5f * g * breathe), Color.Transparent),
                                     center = center,
                                     radius = size.maxDimension * 0.75f,
                                 ),
                                 topLeft = Offset(-spread, -spread),
                                 size = Size(size.width + spread * 2, size.height + spread * 2),
-                                cornerRadius = CornerRadius(18.dp.toPx() + spread),
+                                cornerRadius = CornerRadius(12.dp.toPx() + spread),
                             )
                         }
                     }
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(VentyShapes.Small)
                     .background(bg)
-                    .border(1.dp, border, RoundedCornerShape(18.dp))
+                    .border(1.dp, border, VentyShapes.Small)
                     .pointerInput(p) {
                         detectTapGestures(
                             onPress = {
@@ -903,8 +908,13 @@ private fun PresetsRow(
                     }
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
-                Text(p.name, style = MaterialTheme.typography.labelLarge, color = if (selected) VentyColors.Ember else MaterialTheme.colorScheme.onSurface)
-                Text("${Temperature.toDisplay(p.tenthsC, f)}°", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
+                // The temperature is what a preset is; the name is only a caption.
+                Text(
+                    "${Temperature.toDisplay(p.tenthsC, f)}°",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = if (selected) accent else MaterialTheme.colorScheme.onSurface,
+                )
+                Text(p.name, style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
             }
         }
         if (!exists && presets.size < 8) {
@@ -917,16 +927,19 @@ private fun PresetsRow(
                             placementSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold),
                             fadeOutSpec = tween(180),
                         )
-                        .clip(RoundedCornerShape(18.dp))
-                        .border(1.dp, VentyColors.Heat.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
+                        .clip(VentyShapes.Small)
+                        .border(1.dp, accent.copy(alpha = 0.4f), VentyShapes.Small)
                         .clickable {
                             view.detent(heavy = true)
                             onAdd(Preset("Custom ${presets.size + 1}", s.targetTenths))
                         }
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                 ) {
-                    Icon(Icons.Rounded.Add, contentDescription = null, tint = VentyColors.Heat, modifier = Modifier.size(18.dp))
-                    Text("Save ${Temperature.toDisplay(s.targetTenths, f)}°", style = MaterialTheme.typography.bodySmall, color = VentyColors.Heat)
+                    Text("${Temperature.toDisplay(s.targetTenths, f)}°", style = MaterialTheme.typography.headlineSmall, color = accent)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Add, contentDescription = null, tint = accent, modifier = Modifier.size(14.dp))
+                        Text("Save", style = MaterialTheme.typography.bodySmall, color = accent)
+                    }
                 }
             }
         }
@@ -1255,7 +1268,7 @@ private fun StatusPill(phase: HeaterPhase, s: VentyStatus) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(VentyShapes.Pill)
             .background(color.copy(alpha = 0.14f))
             .padding(horizontal = 14.dp, vertical = 6.dp),
     ) {
@@ -1278,60 +1291,42 @@ private fun StatusPill(phase: HeaterPhase, s: VentyStatus) {
     }
 }
 
+/**
+ * Nudges the base target a degree at a time. The dial is the slider and already shows the
+ * number, so this row only names what the dial can't: the target when the dial is showing a
+ * live reading, or the base under a boost.
+ */
 @Composable
-private fun TargetCard(s: VentyStatus, kind: DeviceKind, onTarget: (Int) -> Unit) {
+private fun TargetStepper(s: VentyStatus, kind: DeviceKind, accent: Color, onTarget: (Int) -> Unit) {
     val f = s.fahrenheit
     val minDisplay = Temperature.toDisplay(kind.minTarget, f)
     val maxDisplay = Temperature.toDisplay(kind.maxTarget, f)
     val target = Temperature.toDisplay(s.targetTenths, f)
-
-    // While the slider is dragged we show the finger's value and only write on release.
-    var dragging by remember { mutableStateOf<Float?>(null) }
-    val shown = dragging?.toInt() ?: target
+    val boost = Temperature.toDisplay(s.effectiveTargetTenths, f) - target
 
     fun commit(display: Int) = onTarget(Temperature.fromDisplay(display.coerceIn(minDisplay, maxDisplay), f))
 
-    Card {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Target", style = MaterialTheme.typography.labelLarge, color = VentyColors.Muted)
-                Row(verticalAlignment = Alignment.Bottom) {
-                    RollingNumber(shown, MaterialTheme.typography.displaySmall, MaterialTheme.colorScheme.onSurface)
-                    Text("°", style = MaterialTheme.typography.displaySmall)
-                    Text(Temperature.unit(f), style = MaterialTheme.typography.titleMedium, color = VentyColors.Muted, modifier = Modifier.padding(start = 2.dp, bottom = 6.dp))
-                }
-                if (s.heaterMode == HeaterMode.Boost || s.heaterMode == HeaterMode.SuperBoost) {
-                    Text(
-                        "Heating to ${Temperature.toDisplay(s.effectiveTargetTenths, f)}° with boost",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = VentyColors.Muted,
-                    )
-                }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        RepeatButton(Icons.Rounded.Remove, "Lower target", tint = accent) { commit(target - 1) }
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            when {
+                s.currentTenths != null -> Text(
+                    "Target $target°${Temperature.unit(f)}",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                boost > 0 -> Text(
+                    "Base $target° + $boost° boost",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = VentyColors.Muted,
+                )
+                else -> Text(
+                    "$minDisplay° – $maxDisplay°",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VentyColors.Muted,
+                )
             }
-            RepeatButton(Icons.Rounded.Remove, "Lower target") { commit(target - 1) }
-            Spacer(Modifier.width(12.dp))
-            RepeatButton(Icons.Rounded.Add, "Raise target") { commit(target + 1) }
         }
-        Spacer(Modifier.height(4.dp))
-        Slider(
-            value = (dragging ?: target.toFloat()).coerceIn(minDisplay.toFloat(), maxDisplay.toFloat()),
-            onValueChange = { dragging = it },
-            onValueChangeFinished = {
-                dragging?.let { commit(it.toInt()) }
-                dragging = null
-            },
-            valueRange = minDisplay.toFloat()..maxDisplay.toFloat(),
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = VentyColors.Heat,
-                inactiveTrackColor = VentyColors.Track,
-            ),
-        )
-        Row {
-            Text("$minDisplay°", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
-            Spacer(Modifier.weight(1f))
-            Text("$maxDisplay°", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
-        }
+        RepeatButton(Icons.Rounded.Add, "Raise target", tint = accent) { commit(target + 1) }
     }
 }
 
@@ -1341,6 +1336,7 @@ internal fun RepeatButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     size: Int = 52,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
     onStep: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -1369,13 +1365,16 @@ internal fun RepeatButton(
                 })
             },
     ) {
-        Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onSurface)
+        Icon(icon, contentDescription = label, tint = tint)
     }
 }
 
-/** Normal / Boost / Superboost while the heater is on. Labels show the resulting temperature. */
+/**
+ * Normal / Boost / Superboost. Labels show the resulting temperature. Greyed out, not hidden,
+ * while the heater is off, so it never moves the rest of the screen.
+ */
 @Composable
-private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
+private fun BoostSelector(s: VentyStatus, enabled: Boolean, onMode: (HeaterMode) -> Unit) {
     val haptics = LocalHapticFeedback.current
     val options = listOf(
         HeaterMode.On to "Normal",
@@ -1386,12 +1385,13 @@ private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
+            .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
+            .clip(VentyShapes.Large)
             .background(VentyColors.Surface)
             .padding(6.dp),
     ) {
         options.forEach { (mode, label) ->
-            val selected = s.heaterMode == mode
+            val selected = enabled && s.heaterMode == mode
             // No point offering a boost that can't go any hotter than the mode below it.
             val lower = if (mode == HeaterMode.SuperBoost) HeaterMode.Boost else HeaterMode.On
             val maxedOut = mode != HeaterMode.On && !selected && s.targetFor(mode) <= s.targetFor(lower)
@@ -1404,10 +1404,11 @@ private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
+                    // The container's 24 dp corner less its 6 dp inset, so the curves stay parallel.
+                    .clip(RoundedCornerShape(18.dp))
                     .background(bg)
                     .graphicsLayer { alpha = if (maxedOut) 0.4f else 1f }
-                    .clickable(enabled = !selected && !maxedOut) {
+                    .clickable(enabled = enabled && !selected && !maxedOut) {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onMode(mode)
                     }
@@ -1426,7 +1427,7 @@ private fun BoostSelector(s: VentyStatus, onMode: (HeaterMode) -> Unit) {
 
 /** [onToggle] gets the tap's position in root coordinates, for the shockwave to start from. */
 @Composable
-private fun HeaterButton(on: Boolean, onToggle: (Offset) -> Unit) {
+private fun HeaterButton(on: Boolean, accent: Color, onToggle: (Offset) -> Unit) {
     val haptics = LocalHapticFeedback.current
     val interaction = remember { MutableInteractionSource() }
     // Where the button sits in the root, and where in it the finger last went down.
@@ -1436,9 +1437,9 @@ private fun HeaterButton(on: Boolean, onToggle: (Offset) -> Unit) {
         interaction.interactions.collect { if (it is PressInteraction.Press) pressAt[0] = it.pressPosition }
     }
     val fill by animateFloatAsState(if (on) 0f else 1f, tween(450), label = "heaterFill")
-    val content by animateColorAsState(if (on) VentyColors.Heat else Color(0xFF1A0D05), label = "heaterFg")
+    val content by animateColorAsState(if (on) accent else Color(0xFF1A0D05), label = "heaterFg")
     val iconTurn by animateFloatAsState(if (on) 180f else 0f, spring(dampingRatio = 0.6f), label = "iconTurn")
-    val shape = RoundedCornerShape(24.dp)
+    val shape = VentyShapes.Large
     Row(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -1467,12 +1468,14 @@ private fun HeaterButton(on: Boolean, onToggle: (Offset) -> Unit) {
             }
             .clip(shape)
             .background(VentyColors.SurfaceHigh)
+            // While heating it's a solid slab of the phase colour, not an outline: still the
+            // main thing to reach for, just quieter than the call to start.
+            .background(accent.copy(alpha = 0.2f * (1f - fill)))
             .background(
                 Brush.horizontalGradient(
                     listOf(VentyColors.Ember.copy(alpha = fill), VentyColors.Heat.copy(alpha = fill), Color(0xFFFF5A2A).copy(alpha = fill)),
                 ),
             )
-            .border(1.dp, VentyColors.Heat.copy(alpha = 0.35f * (1f - fill)), shape)
             .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple()) {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 // A keyboard or accessibility click has no press point, so use the middle.
@@ -1498,14 +1501,45 @@ private fun HeaterButton(on: Boolean, onToggle: (Offset) -> Unit) {
     }
 }
 
+/** Boost offsets and the device's own numbers: things you set once or glance at rarely. */
 @Composable
-private fun BoostOffsetsCard(s: VentyStatus, onBoost: (Int) -> Unit, onSuperBoost: (Int) -> Unit) {
+private fun DeviceCard(
+    s: VentyStatus,
+    info: DeviceInfo,
+    lifetimePuffs: Int,
+    kind: DeviceKind,
+    onBoost: (Int) -> Unit,
+    onSuperBoost: (Int) -> Unit,
+) {
     Card {
-        Text("Boost offsets", style = MaterialTheme.typography.labelLarge, color = VentyColors.Muted)
-        Spacer(Modifier.height(8.dp))
-        OffsetRow("Boost", s.boostOffset, VentyColors.Boost, onBoost)
-        Spacer(Modifier.height(10.dp))
-        OffsetRow("Superboost", s.superBoostOffset, VentyColors.SuperBoost, onSuperBoost, hint = "on top of boost")
+        if (kind.hasBoost) {
+            OffsetRow("Boost", s.boostOffset, VentyColors.Boost, onBoost)
+            Spacer(Modifier.height(8.dp))
+            OffsetRow("Superboost", s.superBoostOffset, VentyColors.SuperBoost, onSuperBoost, hint = "on top of boost")
+            Spacer(
+                Modifier
+                    .padding(vertical = 16.dp)
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.06f)),
+            )
+        }
+        // The Volcano has no puff sensor to count with, so show the target range instead.
+        if (kind == DeviceKind.Volcano) {
+            StatLine("Range", "${Temperature.toDisplay(kind.minTarget, s.fahrenheit)}–${Temperature.toDisplay(kind.maxTarget, s.fahrenheit)}°${Temperature.unit(s.fahrenheit)}")
+        } else {
+            StatLine("Lifetime puffs", "$lifetimePuffs")
+        }
+        StatLine("Heater time", info.heaterMinutes?.let { "${it / 60} h ${it % 60} m" } ?: "–")
+        StatLine("Firmware", info.firmware ?: "–")
+    }
+}
+
+@Composable
+private fun StatLine(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = VentyColors.Muted, modifier = Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.titleMedium)
     }
 }
 
@@ -1526,48 +1560,6 @@ private fun OffsetRow(label: String, value: Int, color: Color, onChange: (Int) -
             modifier = Modifier.width(56.dp),
         )
         RepeatButton(Icons.Rounded.Add, "Raise $label", size = 40) { onChange(value + 1) }
-    }
-}
-
-@Composable
-private fun InfoRow(s: VentyStatus, info: DeviceInfo, lifetimePuffs: Int, kind: DeviceKind) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        // The Volcano has no puff sensor to count with, so show the target range instead.
-        if (kind == DeviceKind.Volcano) {
-            InfoTile(
-                "Range",
-                "${Temperature.toDisplay(kind.minTarget, s.fahrenheit)}–${Temperature.toDisplay(kind.maxTarget, s.fahrenheit)}°",
-                Modifier.weight(1f),
-            )
-        } else {
-            InfoTile("Lifetime puffs", "$lifetimePuffs", Modifier.weight(1f))
-        }
-        InfoTile(
-            "Heater time",
-            info.heaterMinutes?.let { "${it / 60} h ${it % 60} m" } ?: "–",
-            Modifier.weight(1f),
-        )
-    }
-    Spacer(Modifier.height(12.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        InfoTile("Firmware", info.firmware ?: "–", Modifier.weight(1f))
-        InfoTile("Unit", "°" + Temperature.unit(s.fahrenheit), Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun InfoTile(label: String, value: String, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(20.dp)
-    Column(
-        modifier
-            .clip(shape)
-            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh, VentyColors.Surface)))
-            .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.07f), Color.Transparent)), shape)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = VentyColors.Muted)
-        Spacer(Modifier.height(4.dp))
-        Text(value, style = MaterialTheme.typography.titleMedium)
     }
 }
 
@@ -1626,7 +1618,7 @@ private fun BatteryBadge(percent: Int, charging: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clearAndSetSemantics { contentDescription = "Battery $percent%" + if (charging) ", charging" else "" }
-            .clip(RoundedCornerShape(50))
+            .clip(VentyShapes.Pill)
             .background(VentyColors.Surface)
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
@@ -1646,7 +1638,7 @@ private fun Banner(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(VentyShapes.Small)
             .background(VentyColors.Warning.copy(alpha = 0.12f))
             .padding(14.dp),
     ) {
@@ -1678,14 +1670,14 @@ private fun ConnectingPlaceholder(name: String, onCancel: () -> Unit) {
 /** [backdrop] draws over the card's fill and under its content, clipped to its shape. */
 @Composable
 internal fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit) {
-    val shape = RoundedCornerShape(24.dp)
+    // A plain, slightly see-through slab: the heater's colour wash behind the screen shows
+    // through, so cards sit in the scene instead of on top of it.
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(Brush.verticalGradient(listOf(VentyColors.SurfaceHigh, VentyColors.Surface)))
+            .clip(VentyShapes.Large)
+            .background(VentyColors.Surface.copy(alpha = 0.82f))
             .then(backdrop)
-            .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.08f), Color.Transparent)), shape)
             .padding(20.dp),
     ) { content() }
 }

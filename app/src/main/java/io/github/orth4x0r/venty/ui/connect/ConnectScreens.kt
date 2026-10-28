@@ -68,6 +68,7 @@ import io.github.orth4x0r.venty.ble.FoundDevice
 import io.github.orth4x0r.venty.ui.AmbientBackground
 import io.github.orth4x0r.venty.ui.enterFromBelow
 import io.github.orth4x0r.venty.ui.theme.VentyColors
+import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -201,7 +202,7 @@ private fun DeviceRow(device: FoundDevice, onClick: () -> Unit, modifier: Modifi
         modifier = modifier
             .fillMaxWidth()
             .height(64.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(VentyShapes.Large)
             .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(VentyColors.SurfaceHigh, VentyColors.Surface)))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp),
@@ -275,7 +276,7 @@ private fun Title(title: String, subtitle: String) {
 fun PrimaryButton(text: String, onClick: () -> Unit, icon: (@Composable () -> Unit)? = null) {
     Button(
         onClick = onClick,
-        shape = RoundedCornerShape(20.dp),
+        shape = VentyShapes.Large,
         colors = ButtonDefaults.buttonColors(containerColor = VentyColors.Heat),
         modifier = Modifier.fillMaxWidth().height(58.dp),
     ) {

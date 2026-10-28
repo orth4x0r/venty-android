@@ -87,6 +87,7 @@ import io.github.orth4x0r.venty.session.RampRun
 import io.github.orth4x0r.venty.ui.RollingNumber
 import io.github.orth4x0r.venty.ui.Temperature
 import io.github.orth4x0r.venty.ui.theme.VentyColors
+import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlin.math.roundToInt
 
 /**
@@ -164,7 +165,7 @@ private fun PhaseChip(phase: RampPhase) {
         style = MaterialTheme.typography.labelMedium,
         color = color,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(VentyShapes.Pill)
             .background(color.copy(alpha = 0.14f))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )
@@ -240,7 +241,7 @@ private fun IdleBody(
             color = VentyColors.Ember,
             modifier = Modifier
                 .padding(top = 4.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(VentyShapes.Small)
                 .clickable { editing = !editing }
                 .padding(vertical = 6.dp, horizontal = 2.dp),
         )
@@ -303,9 +304,9 @@ private fun ProfileChips(
                         scaleX = scale
                         scaleY = scale
                     }
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(VentyShapes.Small)
                     .background(bg)
-                    .border(1.dp, border, RoundedCornerShape(16.dp))
+                    .border(1.dp, border, VentyShapes.Small)
                     .pointerInput(profile) {
                         detectTapGestures(
                             onTap = {
@@ -327,8 +328,8 @@ private fun ProfileChips(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .animateItem()
-                        .clip(RoundedCornerShape(16.dp))
-                        .border(1.dp, VentyColors.Heat.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+                        .clip(VentyShapes.Small)
+                        .border(1.dp, VentyColors.Heat.copy(alpha = 0.4f), VentyShapes.Small)
                         .clickable {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             onSave()
@@ -371,7 +372,7 @@ private fun RampButton(
     val haptics = LocalHapticFeedback.current
     val heat = VentyColors.Heat
     val ember = VentyColors.Ember
-    val shape = RoundedCornerShape(50)
+    val shape = VentyShapes.Pill
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
