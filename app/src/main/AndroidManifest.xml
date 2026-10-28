@@ -93,6 +93,18 @@
                 android:value="true" />
         </service>
 
+        <service
+            android:name=".wear.VentyWearListener"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/venty"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".widget.VentyWidgetProvider"
             android:exported="true">
