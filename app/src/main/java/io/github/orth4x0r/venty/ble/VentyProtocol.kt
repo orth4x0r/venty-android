@@ -247,8 +247,8 @@ data class VentyStatus(
     val ecoChargeOptimization: Boolean = false,
     val ecoVoltageLimit: Boolean = false,
     val boostVisualization: Boolean = false,
-    /** "Bluetooth permanent" (settings2 bit 0), or null when the packet is too short to carry it. */
-    val blePermanent: Boolean? = null,
+    /** "Bluetooth permanent" (settings2 bit 0), or null when the packet was too short to carry it. */
+    val blePermanent: Boolean? = false,
 ) {
     /** What the heater is actually aiming for, including any active boost. The Venty tops out at 210 °C. */
     val effectiveTargetTenths: Int
