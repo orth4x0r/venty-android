@@ -281,7 +281,7 @@ class VentyService : Service() {
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_PROGRESS)
             .setContentIntent(openApp())
-            .addExtras(android.os.Bundle().apply { putBoolean(Notification.EXTRA_REQUEST_PROMOTED_ONGOING, true) })
+            .addExtras(android.os.Bundle().apply { putBoolean(EXTRA_REQUEST_PROMOTED_ONGOING, true) })
         chip?.let { b.setShortCriticalText(it) }
         if (boostEnd != null) {
             b.setUsesChronometer(true).setChronometerCountDown(true).setShowWhen(true).setWhen(boostEnd)
@@ -337,6 +337,8 @@ class VentyService : Service() {
         private const val ONGOING_ID = 1
         private const val ALERT_ID = 2
         private const val BATTERY_ID = 3
+        // Notification.EXTRA_REQUEST_PROMOTED_ONGOING only exists from SDK 36.1; this is its value.
+        private const val EXTRA_REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing"
         /** How long the Venty holds boost before dropping back, unless the timeout is turned off. */
         private const val BOOST_TIMEOUT_MS = 90_000L
         private const val ACTION_TOGGLE = "io.github.orth4x0r.venty.TOGGLE"
