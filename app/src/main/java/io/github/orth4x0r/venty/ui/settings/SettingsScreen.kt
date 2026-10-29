@@ -164,7 +164,7 @@ fun SettingsScreen(
             SwitchRow(
                 icon = Icons.Rounded.Thermostat,
                 title = "Fahrenheit",
-                subtitle = "Show temperatures in °F instead of °C",
+                subtitle = "Show °F instead of °C",
                 checked = status?.fahrenheit == true,
                 enabled = hasStatus,
                 onChange = onFahrenheit,
@@ -561,7 +561,7 @@ private fun FindMyButton(enabled: Boolean, onClick: () -> Unit) {
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            if (enabled) "Makes it buzz and flash, then shows how close you are" else "Connect to change",
+            if (enabled) "Makes it buzz, then shows how close you are" else "Connect to change",
             style = MaterialTheme.typography.bodySmall,
             color = VentyColors.Muted,
         )
