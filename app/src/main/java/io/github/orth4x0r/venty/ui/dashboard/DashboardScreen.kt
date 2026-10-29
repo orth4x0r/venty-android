@@ -171,6 +171,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.orth4x0r.venty.ble.ConnectionState
 import io.github.orth4x0r.venty.ble.DeviceInfo
@@ -182,6 +183,7 @@ import io.github.orth4x0r.venty.ble.VentyStatus
 import io.github.orth4x0r.venty.ui.Temperature
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 import io.github.orth4x0r.venty.ui.theme.VentyShapes
+import io.github.orth4x0r.venty.ui.theme.GaugeFont
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -1753,7 +1755,10 @@ private fun BatteryBadge(percent: Int, charging: Boolean) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp).padding(end = 2.dp))
-        Text("$percent%", style = MaterialTheme.typography.labelLarge, color = tint)
+        // A figure, so the gauge face, and it ticks down like the battery card's number.
+        val figure = MaterialTheme.typography.labelLarge.copy(fontFamily = GaugeFont, fontSize = 16.sp)
+        RollingNumber(percent, figure, tint)
+        Text("%", style = figure, color = tint)
     }
 }
 
