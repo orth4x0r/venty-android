@@ -132,6 +132,8 @@ fun SettingsScreen(
     onAppPrefs: (AppPrefs) -> Unit,
     onBack: () -> Unit,
     onBlePermanent: (Boolean) -> Unit = {},
+    /** The last "Keep Bluetooth on" choice, shown when the device doesn't report the flag. */
+    blePermanentChoice: Boolean = false,
     /** The saved device's address, for "connect when it turns on". */
     deviceAddress: String? = null,
 ) {
@@ -326,7 +328,7 @@ fun SettingsScreen(
 
         SectionHeader("Connection", Modifier.enterFromBelow(392))
         SettingsCard(Modifier.enterFromBelow(400)) {
-            ConnectionRows(kind, status, deviceAddress, onBlePermanent)
+            ConnectionRows(kind, status, deviceAddress, blePermanentChoice, onBlePermanent)
         }
 
         SectionHeader("Device", Modifier.enterFromBelow(410))
@@ -576,7 +578,13 @@ private fun FindMyButton(enabled: Boolean, onClick: () -> Unit) {
  * phone killing the background connection.
  */
 @Composable
-private fun ConnectionRows(kind: DeviceKind, status: VentyStatus?, deviceAddress: String?, onBlePermanent: (Boolean) -> Unit) {
+private fun ConnectionRows(
+    kind: DeviceKind,
+    status: VentyStatus?,
+    deviceAddress: String?,
+    blePermanentChoice: Boolean,
+    onBlePermanent: (Boolean) -> Unit,
+) {
     val context = LocalContext.current
     val supported = remember { CompanionLink.isSupported(context) }
     var observed by remember { mutableStateOf(CompanionLink.observedAddress(context) != null) }
@@ -616,16 +624,20 @@ private fun ConnectionRows(kind: DeviceKind, status: VentyStatus?, deviceAddress
             }
         },
     )
-    // Only firmware that sends the 17-byte status reports this flag; a connected Venty with the
-    // 16-byte status can't show or confirm it, so the row goes rather than sitting greyed out.
-    if (kind.hasVentyExtras && (status == null || status.blePermanent != null)) {
+    // The Venty's 16-byte status doesn't carry this flag, so the switch shows the stored choice,
+    // which the controller writes again on every connect.
+    if (kind.hasVentyExtras) {
         RowDivider()
         SwitchRow(
             icon = Icons.Rounded.Bluetooth,
             title = "Keep Bluetooth on",
-            subtitle = "Stays connectable while idle. Experimental on the Venty; may use a little more battery",
-            checked = status?.blePermanent == true,
-            enabled = status?.blePermanent != null,
+            subtitle = if (status != null && status.blePermanent == null) {
+                "Experimental. Your Venty doesn't report this, so leave it idle to see if it stays connected"
+            } else {
+                "Stays connectable while idle. Experimental on the Venty; may use a little more battery"
+            },
+            checked = status?.blePermanent ?: blePermanentChoice,
+            enabled = status != null,
             onChange = onBlePermanent,
         )
     }
