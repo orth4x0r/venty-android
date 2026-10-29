@@ -624,9 +624,9 @@ private fun ConnectionRows(
             }
         },
     )
-    // Only firmware that sends the 17-byte status reports this flag; a connected Venty with the
-    // 16-byte status can't show or confirm it, so the row goes rather than sitting greyed out.
-    if (kind.hasVentyExtras && (status == null || status.blePermanent != null)) {
+    // The Venty's 16-byte status doesn't carry this flag, so the switch shows the stored choice,
+    // which the controller writes again on every connect.
+    if (kind.hasVentyExtras) {
         RowDivider()
         SwitchRow(
             icon = Icons.Rounded.Bluetooth,
