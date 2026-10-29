@@ -8,6 +8,7 @@
   <img alt="Android 8.0+" src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white">
   <img alt="Bluetooth LE" src="https://img.shields.io/badge/Bluetooth-LE-0082FC?logo=bluetooth&logoColor=white">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-FF7A3D"></a>
+  <a href="https://github.com/orth4x0r/venty-android/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/orth4x0r/venty-android?color=FF7A3D&label=download"></a>
 </p>
 
 <p align="center">
@@ -64,18 +65,23 @@ All captured in the built-in demo mode, no device needed.
 
 - Big draggable temperature dial with magnetic presets
 - Normal / Boost / Super selector that shows where each mode will land
-- Find my device, °C / °F, brightness, vibration, eco charging and boost timeout
+- Ramp profiles that step the temperature up through a session on their own
+- Find my device with a radar that shows how close you are (signal strength), plus °C / °F, brightness, vibration, eco charging and boost timeout
 - Auto-reconnect with backoff, and a foreground service that keeps the link alive in the background
 - "Connect when it turns on" (Android 12+): Android wakes the app when your device starts advertising, even after you swipe it away. Not after **Force stop**, though: Android keeps a force-stopped app asleep until you open it again, so swipe it away instead
 
 **Sessions**
 
-- Puff detection and a session tracker, with a session-done card and cool-down ring
-- History with growing chart bars and battery stats
-- "At temperature" notification, a rich ongoing notification and a home-screen widget
+- Puff detection with a puff timer ring, a session tracker, session stats and a session-done card with a cool-down ring
+- History with growing chart bars, battery stats and a battery forecast
+- A monthly "Wrapped" story of your sessions
+- "At temperature" notification, a Live Update heat-up notification on Android 16, a home-screen widget and a Quick Settings heater tile
+- ⌚ A Wear OS tile to check and control the heater from your watch
 
 **Flair**
 
+- A shader heat aura that glows hotter as it heats up, with heat-up haptics
+- Accent colour matched to your device's colour, or pick your own
 - An ignition splash, rising embers, a rotating corona that speeds up in boost and a lava effect for Superboost
 - A heat shockwave and ready flash when you hit temperature, slot-machine digits, a liquid charging fill
 - A scan radar with signal bars, glassy cards, predictive back and Material You wallpaper colours
@@ -83,7 +89,9 @@ All captured in the built-in demo mode, no device needed.
 
 ## Install
 
-There's no Play Store listing. Build it yourself:
+There's no Play Store listing. Grab the APK from the [latest release](https://github.com/orth4x0r/venty-android/releases/latest) (`venty-v….apk` for the phone, `venty-wear-v….apk` for a Wear OS watch) and install it. It's signed with a debug key, so allow installs from unknown sources.
+
+Or build it yourself:
 
 ```sh
 git clone https://github.com/orth4x0r/venty-android
@@ -91,7 +99,7 @@ cd venty-android
 ./gradlew assembleRelease   # or open the folder in Android Studio
 ```
 
-The APK lands in `app/build/outputs/apk/release/app-release.apk`. It's signed with a debug key, so allow installs from unknown sources. You need the Android SDK (Android Studio bundles it).
+The APK lands in `app/build/outputs/apk/release/app-release.apk`. You need the Android SDK (Android Studio bundles it).
 
 ## How it talks to the device
 
