@@ -44,6 +44,7 @@ class DemoLink : VentyLink {
         charging = false,
         fahrenheit = false,
         setpointReached = false,
+        blePermanent = false,
     )
 
     init {
@@ -67,6 +68,7 @@ class DemoLink : VentyLink {
                     byteArrayOf(0x02, 0x01) + "DEMO01".toByteArray(Charsets.US_ASCII) + ByteArray(12)
                 )
                 VentyProtocol.CMD_USAGE -> out.trySend(byteArrayOf(0x04, 0x2C, 0x01, 0x00) + ByteArray(16))
+                VentyProtocol.CMD_IDENTITY -> out.trySend(VentyProtocol.encodeIdentity("VY000042", DeviceColor.Black))
                 VentyProtocol.CMD_DEVICE_SETTINGS -> {
                     val mask = packet.u8(1)
                     if (mask and 0x01 != 0) brightness = packet.u8(2)
@@ -82,6 +84,9 @@ class DemoLink : VentyLink {
             }
         }
     }
+
+    /** A signal that wanders around -60 dBm, so the find-my radar has something to show. */
+    override suspend fun readRssi(): Int = -60 + (kotlin.random.Random.nextInt(-12, 13))
 
     override fun close() {
         scope.cancel()
@@ -104,6 +109,9 @@ class DemoLink : VentyLink {
                 ecoVoltageLimit = pick(VentyProtocol.SETTING_ECO_VOLTAGE, state.ecoVoltageLimit),
                 boostVisualization = pick(VentyProtocol.SETTING_BOOST_VISUALIZATION, state.boostVisualization),
             )
+            if (p.u8(17) and VentyProtocol.SETTING2_BLE_PERMANENT != 0) {
+                state = state.copy(blePermanent = p.u8(16) and VentyProtocol.SETTING2_BLE_PERMANENT != 0)
+            }
         }
         if (mask and VentyProtocol.MASK_BOOST != 0) state = state.copy(boostOffset = p.u8(6))
         if (mask and VentyProtocol.MASK_SUPERBOOST != 0) state = state.copy(superBoostOffset = p.u8(7))

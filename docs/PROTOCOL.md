@@ -144,7 +144,7 @@ Notes:
 - **Leaving boost.** Tested on a real Venty (2026-10-11): boost can be entered by writing mode 2, but writing mode 1 (alone, or with the target) does **not** end it. The official app (v3.4.1) never writes 1 while heating; its power button writes 0 in any heating mode. Ending boost from a client therefore means writing 0 and then 1, or waiting for the boost timeout. Superboost (mode 3) is boost plus superboost: the offsets stack.
 - **Boost timeout.** Boost ends after about 90 s unless "permanent boost" is on, which is the boost-timeout-disabled flag in cmd `0x06` byte 6.
 - The factory-reset flow in the app also sets the setpoint to 180 °C.
-- BLE permanent (settings2 bit 0) is exposed in the app for Veazy only. Whether a Venty honours it is **unverified**.
+- BLE permanent (settings2 bit 0) is exposed in the app for Veazy only (toggle `bluetoothVeazyVenty`). It's written as `01 80`, byte 16 = value, byte 17 = `01` (bytes 14–15 zero), and read back from byte 16 of any status packet of 17+ bytes. Whether a Venty honours it is **unverified**; this app offers it as an experimental "Keep Bluetooth on" switch.
 
 ### 5.2 `0x02` firmware
 
@@ -156,7 +156,7 @@ Response: bytes 1–3 = heater runtime in minutes (u24 LE); bytes 4–6 = chargi
 
 ### 5.4 `0x05` identity
 
-Response: serial = ASCII bytes 15–16 (model prefix) followed by bytes 9–14. Byte 18 = colour index of the device.
+Response: serial = ASCII bytes 15–16 (model prefix) followed by bytes 9–14. Byte 18 = colour index of the device: the official app reads it on the Veazy only (packet longer than 18 bytes) and maps 2 = blue, 3 = pink, 4 = orange, anything else = black. What a Venty sends here is **unverified**.
 
 ### 5.5 `0x06` device settings
 

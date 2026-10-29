@@ -10,6 +10,7 @@ import io.github.orth4x0r.venty.prefs.BatteryLog
 import io.github.orth4x0r.venty.prefs.PrefsStore
 import io.github.orth4x0r.venty.service.VentyService
 import io.github.orth4x0r.venty.session.SessionTracker
+import io.github.orth4x0r.venty.wear.WearSync
 import io.github.orth4x0r.venty.widget.VentyWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,12 +59,18 @@ class VentyApp : Application() {
             }
         }
 
-        // Re-render the home-screen widget only when something it shows changes.
+        // Remember the device's body colour for the "match my device" accent.
+        scope.launch {
+            controller.info.collect { i -> i.color?.let(prefs::setDeviceColor) }
+        }
+
+        // Re-render the home-screen widget and the watch tile only when something they show changes.
         scope.launch {
             combine(controller.status, controller.connection, controller.kind) { s, c, k ->
                 Triple(s?.copy(autoOffSeconds = 0), c is ConnectionState.Connected, k)
             }.distinctUntilChanged().collect { (s, connected, kind) ->
                 VentyWidget.update(this@VentyApp, s, connected, kind)
+                WearSync.publish(this@VentyApp, s, connected, kind)
             }
         }
     }

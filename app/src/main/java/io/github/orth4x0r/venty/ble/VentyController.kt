@@ -47,6 +47,8 @@ private const val PENDING_HOLD_MS = 1_100L
 private const val RAMP_TICK_MS = 500L
 /** A ramp gives up if the heater still hasn't come on after this long. */
 private const val RAMP_HEATER_ON_TIMEOUT_MS = 15_000L
+/** Direct connects tried before handing over to a background (autoConnect) request. */
+private const val DIRECT_ATTEMPTS = 2
 
 data class FoundDevice(
     val address: String,
@@ -64,7 +66,13 @@ sealed interface ConnectionState {
     data class Failed(val message: String) : ConnectionState
 }
 
-data class DeviceInfo(val firmware: String? = null, val heaterMinutes: Int? = null)
+data class DeviceInfo(
+    val firmware: String? = null,
+    val heaterMinutes: Int? = null,
+    val serial: String? = null,
+    /** Body colour from the identity packet, when the device reports one. */
+    val color: DeviceColor? = null,
+)
 
 /**
  * Owns the connection to the Venty or Volcano: scanning, connecting, the 500 ms status poll, automatic
@@ -209,15 +217,37 @@ class VentyController(context: Context) {
             .putString(KEY_NAME, device.name)
             .putString(KEY_KIND, device.kind.name)
             .apply()
-        startSession(device.name, demo = false, kind = device.kind) {
+        startSession(device.name, demo = false, kind = device.kind) { attempt ->
             val bt = adapter?.getRemoteDevice(device.address) ?: throw LinkLostException("Bluetooth unavailable")
             if (!bluetoothEnabled) throw LinkLostException("Bluetooth is off")
+            // A couple of quick direct tries cover a brief drop. After that the device is probably
+            // asleep, so leave a background request with the Bluetooth stack: it connects within
+            // about a second of the device advertising again, with no scanning or backoff gap.
+            val auto = attempt >= DIRECT_ATTEMPTS
+            if (auto && attempt == DIRECT_ATTEMPTS) logLink("Waiting in the background for the ${device.kind.displayName}")
             when (device.kind) {
-                DeviceKind.Venty -> GattLink.connect(appContext, bt)
-                DeviceKind.Volcano -> GattVolcanoLink.connect(appContext, bt)
+                DeviceKind.Venty -> GattLink.connect(appContext, bt, autoConnect = auto)
+                DeviceKind.Volcano -> GattVolcanoLink.connect(appContext, bt, autoConnect = auto)
             }
         }
     }
+
+    /**
+     * The saved device has started advertising (reported by the companion device service). Starts
+     * a fresh direct connect unless a link is already up or being set up.
+     */
+    fun onDeviceAppeared() {
+        when (_connection.value) {
+            is ConnectionState.Connected, is ConnectionState.Connecting -> return
+            else -> {
+                logLink("Device turned on, connecting")
+                connectToLast()
+            }
+        }
+    }
+
+    /** The saved device's address, for the companion device association. */
+    val lastDeviceAddress: String? get() = prefs.getString(KEY_ADDRESS, null)
 
     /** Reconnects to the last device used, if there is one. Returns false if there isn't. */
     fun connectToLast(): Boolean {
@@ -237,6 +267,7 @@ class VentyController(context: Context) {
 
     fun forgetDevice() {
         prefs.edit().clear().apply()
+        io.github.orth4x0r.venty.companion.CompanionLink.disassociate(appContext)
         disconnect()
     }
 
@@ -256,7 +287,7 @@ class VentyController(context: Context) {
         _connection.value = ConnectionState.Idle
     }
 
-    private fun startSession(name: String, demo: Boolean, kind: DeviceKind, open: suspend () -> VentyLink) {
+    private fun startSession(name: String, demo: Boolean, kind: DeviceKind, open: suspend (attempt: Int) -> VentyLink) {
         disconnect()
         _kind.value = kind
         _connection.value = ConnectionState.Connecting(name)
@@ -270,7 +301,7 @@ class VentyController(context: Context) {
                     ConnectionState.Reconnecting(name, attempt, lastError)
                 }
                 try {
-                    val l = open()
+                    val l = open(attempt)
                     link = l
                     l.use { runConnected(it, name, demo) { attempt = 0 } }
                 } catch (e: CancellationException) {
@@ -283,7 +314,8 @@ class VentyController(context: Context) {
                     link = null
                 }
                 attempt++
-                delay(backoffMs(attempt))
+                // A background request does its own waiting, so there's no need to back off before it.
+                delay(if (!demo && attempt > DIRECT_ATTEMPTS) 1_000L else backoffMs(attempt))
             }
         }
     }
@@ -306,6 +338,7 @@ class VentyController(context: Context) {
         l.send(VentyProtocol.pollStatus())
         l.send(VentyProtocol.readUsage())
         l.send(VentyProtocol.readDeviceSettings())
+        l.send(VentyProtocol.readIdentity())
 
         var tick = 0
         var announced = false
@@ -357,6 +390,7 @@ class VentyController(context: Context) {
         VentyProtocol.parseDeviceSettings(data)?.let { _deviceSettings.value = it; return }
         VentyProtocol.parseFirmware(data)?.let { fw -> _info.update { it.copy(firmware = fw) }; return }
         VentyProtocol.parseHeaterMinutes(data)?.let { m -> _info.update { it.copy(heaterMinutes = m) }; return }
+        VentyProtocol.parseIdentity(data)?.let { id -> _info.update { it.copy(serial = id.serial, color = id.color) }; return }
         Log.d(TAG, "unhandled packet ${data.toHex()}")
     }
 
@@ -622,6 +656,14 @@ class VentyController(context: Context) {
     }
 
     fun findMyDevice() = send(VentyProtocol.findMyDevice())
+
+    /** Signal strength of the current link in dBm, or null when there's no link or the read failed. */
+    suspend fun readRssi(): Int? = try {
+        link?.readRssi()
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        null
+    }
 
     /** Starts or stops the Volcano's pump. Does nothing on a Venty. */
     fun setPump(on: Boolean) {

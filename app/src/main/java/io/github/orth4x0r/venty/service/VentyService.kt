@@ -46,6 +46,9 @@ class VentyService : Service() {
     // Null until the first status, so connecting to an already-hot Venty doesn't fire the alert.
     private var wasReady: Boolean? = null
     private var lowBatteryAlerted = false
+    /** When the current boost or superboost started (wall clock), for the Live Update countdown. */
+    private var boostSince: Long? = null
+    private var boostMode: HeaterMode? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -76,6 +79,7 @@ class VentyService : Service() {
                     stopSelf()
                     return@collect
                 }
+                trackBoost(s)
                 notify(ONGOING_ID, buildOngoing(s, c, l, p))
                 checkAlerts(s)
             }
@@ -139,7 +143,22 @@ class VentyService : Service() {
         .setAutoCancel(true)
         .setContentIntent(openApp())
 
+    private fun trackBoost(s: VentyStatus?) {
+        val mode = s?.heaterMode
+        val boosting = mode == HeaterMode.Boost || mode == HeaterMode.SuperBoost
+        if (!boosting) {
+            boostSince = null
+            boostMode = null
+        } else if (mode != boostMode) {
+            boostSince = System.currentTimeMillis()
+            boostMode = mode
+        }
+    }
+
     private fun buildOngoing(s: VentyStatus?, c: ConnectionState, session: SessionKey? = null, pump: Boolean = false): Notification {
+        if (Build.VERSION.SDK_INT >= 36 && s != null && c is ConnectionState.Connected && s.heaterMode.isHeating) {
+            return buildLiveUpdate(s, session, pump)
+        }
         val kind = app.controller.kind.value
         val title: String
         val text: String
@@ -200,6 +219,84 @@ class VentyService : Service() {
         return b.build()
     }
 
+    /**
+     * Android 16 Live Update while heating: a segmented progress bar (heat-up, then ready) with a
+     * flame tracker riding it, a status-bar chip with the temperature or the boost seconds left,
+     * and a spot on the lock screen. Promoted notifications can't be colorized, so the colour
+     * lives in the progress segments instead.
+     */
+    @androidx.annotation.RequiresApi(36)
+    private fun buildLiveUpdate(s: VentyStatus, session: SessionKey?, pump: Boolean): Notification {
+        val kind = app.controller.kind.value
+        val unit = Temperature.unit(s.fahrenheit)
+        val t = Temperature.toDisplay(s.effectiveTargetTenths, s.fahrenheit)
+        val boosting = s.heaterMode == HeaterMode.Boost || s.heaterMode == HeaterMode.SuperBoost
+        val boostEnd = boostSince?.takeIf { boosting && app.controller.deviceSettings.value?.boostTimeoutDisabled != true }
+            ?.plus(BOOST_TIMEOUT_MS)
+        val title = when {
+            s.heaterMode == HeaterMode.SuperBoost -> "Superboost · $t°$unit"
+            s.heaterMode == HeaterMode.Boost -> "Boost · $t°$unit"
+            s.setpointReached -> "Ready at $t°$unit"
+            else -> "Heating to $t°$unit"
+        }
+        val text = when {
+            boostEnd != null -> "Back to normal when the timer runs out"
+            !s.setpointReached -> session?.heatPercent?.let { "$it % of the way there" } ?: "Warming up"
+            kind.hasBattery -> "Battery ${s.battery}%" + if (s.charging) " · charging" else ""
+            pump -> "Pump running"
+            else -> "Enjoy"
+        }
+        val heatColor = when (s.heaterMode) {
+            HeaterMode.SuperBoost -> VentyColors.SuperBoost
+            HeaterMode.Boost -> VentyColors.Boost
+            else -> VentyColors.Heat
+        }.toArgb()
+        // Two segments: the climb to temperature, then a short "ready" stretch at the end.
+        val progress = when {
+            s.setpointReached -> 100
+            else -> ((session?.heatPercent ?: 0) * 85 / 100)
+        }
+        val style = Notification.ProgressStyle()
+            .setStyledByProgress(true)
+            .setProgressSegments(
+                listOf(
+                    Notification.ProgressStyle.Segment(85).setColor(heatColor),
+                    Notification.ProgressStyle.Segment(15).setColor(VentyColors.Ready.toArgb()),
+                ),
+            )
+            .setProgress(progress)
+            .setProgressIndeterminate(!s.setpointReached && session?.heatPercent == null)
+            .setProgressTrackerIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_notification))
+        val chip = when {
+            boostEnd != null -> null // The chronometer below counts down instead.
+            s.setpointReached -> "Ready"
+            else -> "$t°"
+        }
+        val b = Notification.Builder(this, CHANNEL_ONGOING)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(style)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(Notification.CATEGORY_PROGRESS)
+            .setContentIntent(openApp())
+            .addExtras(android.os.Bundle().apply { putBoolean(EXTRA_REQUEST_PROMOTED_ONGOING, true) })
+        chip?.let { b.setShortCriticalText(it) }
+        if (boostEnd != null) {
+            b.setUsesChronometer(true).setChronometerCountDown(true).setShowWhen(true).setWhen(boostEnd)
+        } else if (session != null) {
+            b.setUsesChronometer(true).setShowWhen(true).setWhen(session.startMs)
+        }
+        b.addAction(Notification.Action.Builder(null, "Heater off", action(ACTION_TOGGLE, 1)).build())
+        if (kind.hasBoost) {
+            b.addAction(Notification.Action.Builder(null, if (s.heaterMode == HeaterMode.Boost) "Normal" else "Boost", action(ACTION_BOOST, 2)).build())
+        }
+        if (kind.hasPump) b.addAction(Notification.Action.Builder(null, if (pump) "Stop pump" else "Pump", action(ACTION_PUMP, 4)).build())
+        b.addAction(Notification.Action.Builder(null, "Disconnect", action(ACTION_DISCONNECT, 3)).build())
+        return b.build()
+    }
+
     private fun action(name: String, code: Int): PendingIntent = PendingIntent.getService(
         this,
         code,
@@ -240,6 +337,10 @@ class VentyService : Service() {
         private const val ONGOING_ID = 1
         private const val ALERT_ID = 2
         private const val BATTERY_ID = 3
+        // Notification.EXTRA_REQUEST_PROMOTED_ONGOING only exists from SDK 36.1; this is its value.
+        private const val EXTRA_REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing"
+        /** How long the Venty holds boost before dropping back, unless the timeout is turned off. */
+        private const val BOOST_TIMEOUT_MS = 90_000L
         private const val ACTION_TOGGLE = "io.github.orth4x0r.venty.TOGGLE"
         private const val ACTION_BOOST = "io.github.orth4x0r.venty.BOOST"
         private const val ACTION_DISCONNECT = "io.github.orth4x0r.venty.DISCONNECT"

@@ -194,4 +194,58 @@ class VentyProtocolTest {
         assertEquals(s, VentyProtocol.parseStatus(VentyProtocol.encodeStatus(s)))
         assertEquals(0x6A, VentyProtocol.encodeStatus(s).u8(14))
     }
+
+    @Test
+    fun `ble permanent writes settings2 with its own mask`() {
+        val on = VentyProtocol.setBlePermanent(true)
+        assertEquals(0x80, on.u8(1))
+        assertEquals(0, on.u8(14))
+        assertEquals(0, on.u8(15))
+        assertEquals(1, on.u8(16))
+        assertEquals(1, on.u8(17))
+        val off = VentyProtocol.setBlePermanent(false)
+        assertEquals(0, off.u8(16))
+        assertEquals(1, off.u8(17))
+    }
+
+    @Test
+    fun `status reads ble permanent only when the packet carries byte 16`() {
+        val s = VentyProtocol.parseStatus(VentyProtocol.encodeStatus(sampleStatus().copy(blePermanent = true)))!!
+        assertEquals(true, s.blePermanent)
+        val short = VentyProtocol.encodeStatus(sampleStatus()).copyOf(15)
+        assertNull(VentyProtocol.parseStatus(short)!!.blePermanent)
+    }
+
+    @Test
+    fun `identity round trips serial and colour`() {
+        val id = VentyProtocol.parseIdentity(VentyProtocol.encodeIdentity("VY123456", DeviceColor.Pink))!!
+        assertEquals("VY123456", id.serial)
+        assertEquals(DeviceColor.Pink, id.color)
+    }
+
+    @Test
+    fun `unknown colour indexes are black, as in the official app`() {
+        assertEquals(DeviceColor.Black, DeviceColor.fromIndex(0))
+        assertEquals(DeviceColor.Black, DeviceColor.fromIndex(9))
+        assertEquals(DeviceColor.Orange, DeviceColor.fromIndex(4))
+    }
+
+    @Test
+    fun `identity without byte 18 has no colour`() {
+        val id = VentyProtocol.parseIdentity(VentyProtocol.encodeIdentity("VY123456", DeviceColor.Blue).copyOf(17))!!
+        assertNull(id.color)
+    }
+
+    private fun sampleStatus() = VentyStatus(
+        currentTenths = null,
+        targetTenths = 1850,
+        boostOffset = 15,
+        superBoostOffset = 15,
+        battery = 80,
+        autoOffSeconds = 0,
+        heaterMode = HeaterMode.On,
+        charging = false,
+        fahrenheit = false,
+        setpointReached = false,
+    )
 }

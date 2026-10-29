@@ -1,5 +1,25 @@
 package io.github.orth4x0r.venty.ui.settings
 
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.BatterySaver
+import androidx.compose.material.icons.rounded.BluetoothSearching
+import androidx.compose.material.icons.rounded.ColorLens
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import io.github.orth4x0r.venty.companion.CompanionLink
 import io.github.orth4x0r.venty.ble.DeviceKind
 import io.github.orth4x0r.venty.ble.VolcanoProtocol
 import androidx.compose.foundation.background
@@ -63,6 +83,7 @@ import io.github.orth4x0r.venty.ble.LinkEvent
 import io.github.orth4x0r.venty.ble.VentyProtocol
 import io.github.orth4x0r.venty.ble.VentyStatus
 import io.github.orth4x0r.venty.ui.enterFromBelow
+import io.github.orth4x0r.venty.ui.theme.Accent
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlin.math.roundToInt
@@ -78,6 +99,10 @@ data class AppPrefs(
     val puffTargetSeconds: Int = DEFAULT_PUFF_TARGET_S,
     /** Buzz the phone when a draw reaches [puffTargetSeconds]. */
     val puffBuzz: Boolean = true,
+    /** The heat accent colour, unless [dynamicColor] is on. */
+    val accent: Accent = Accent.Device,
+    /** A heartbeat buzz on the phone during heat-up and a pulse when ready. */
+    val heatHaptics: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_PUFF_TARGET_S = 8
@@ -105,6 +130,8 @@ fun SettingsScreen(
     onFindMy: () -> Unit,
     onAppPrefs: (AppPrefs) -> Unit,
     onBack: () -> Unit,
+    /** The saved device's address, for "connect when it turns on". */
+    deviceAddress: String? = null,
 ) {
     val hasStatus = status != null
     val hasSettings = deviceSettings != null
@@ -137,7 +164,7 @@ fun SettingsScreen(
             SwitchRow(
                 icon = Icons.Rounded.Thermostat,
                 title = "Fahrenheit",
-                subtitle = "Show temperatures in °F instead of °C",
+                subtitle = "Show °F instead of °C",
                 checked = status?.fahrenheit == true,
                 enabled = hasStatus,
                 onChange = onFahrenheit,
@@ -207,7 +234,7 @@ fun SettingsScreen(
                 SwitchRow(
                     icon = Icons.Rounded.BatteryChargingFull,
                     title = "Eco voltage limit",
-                    subtitle = "Stops charging at about 90 %",
+                    subtitle = "Stops charging at about 90%",
                     checked = status?.ecoVoltageLimit == true,
                     enabled = hasStatus,
                     onChange = onEcoVoltage,
@@ -217,12 +244,12 @@ fun SettingsScreen(
                     icon = Icons.Rounded.NotificationsActive,
                     title = "Low battery alert",
                     subtitle = "Notify me when the battery drops to this level",
-                    valueLabel = if (appPrefs.lowBatteryAlertPercent <= 0) "Off" else "${appPrefs.lowBatteryAlertPercent} %",
+                    valueLabel = if (appPrefs.lowBatteryAlertPercent <= 0) "Off" else "${appPrefs.lowBatteryAlertPercent}%",
                     value = appPrefs.lowBatteryAlertPercent.toFloat(),
                     range = 0f..50f,
                     steps = 9,
                     enabled = true,
-                    labelFor = { if (it.roundToInt() <= 0) "Off" else "${it.roundToInt()} %" },
+                    labelFor = { if (it.roundToInt() <= 0) "Off" else "${it.roundToInt()}%" },
                     onCommit = { onAppPrefs(appPrefs.copy(lowBatteryAlertPercent = it.roundToInt())) },
                 )
             }
@@ -237,6 +264,12 @@ fun SettingsScreen(
                 checked = appPrefs.dynamicColor,
                 enabled = true,
                 onChange = { onAppPrefs(appPrefs.copy(dynamicColor = it)) },
+            )
+            RowDivider()
+            AccentRow(
+                selected = appPrefs.accent,
+                enabled = !appPrefs.dynamicColor,
+                onSelect = { onAppPrefs(appPrefs.copy(accent = it)) },
             )
             RowDivider()
             SwitchRow(
@@ -255,6 +288,15 @@ fun SettingsScreen(
                 checked = appPrefs.readyNotification,
                 enabled = true,
                 onChange = { onAppPrefs(appPrefs.copy(readyNotification = it)) },
+            )
+            RowDivider()
+            SwitchRow(
+                icon = Icons.Rounded.Vibration,
+                title = "Heat-up heartbeat",
+                subtitle = "The phone pulses faster as it heats, and thumps when ready",
+                checked = appPrefs.heatHaptics,
+                enabled = true,
+                onChange = { onAppPrefs(appPrefs.copy(heatHaptics = it)) },
             )
             RowDivider()
             SliderRow(
@@ -278,6 +320,11 @@ fun SettingsScreen(
                 enabled = true,
                 onChange = { onAppPrefs(appPrefs.copy(puffBuzz = it)) },
             )
+        }
+
+        SectionHeader("Connection", Modifier.enterFromBelow(392))
+        SettingsCard(Modifier.enterFromBelow(400)) {
+            ConnectionRows(kind, deviceAddress)
         }
 
         SectionHeader("Device", Modifier.enterFromBelow(410))
@@ -313,7 +360,7 @@ fun SettingsScreen(
 
 /** The Venty shows brightness 1-9; the Volcano's is a percentage, so show what it will get. */
 private fun brightnessLabel(kind: DeviceKind, level: Int): String =
-    if (kind == DeviceKind.Volcano) "${VolcanoProtocol.levelToBrightness(level)} %" else level.toString()
+    if (kind == DeviceKind.Volcano) "${VolcanoProtocol.levelToBrightness(level)}%" else level.toString()
 
 @Composable
 private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
@@ -514,9 +561,148 @@ private fun FindMyButton(enabled: Boolean, onClick: () -> Unit) {
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            if (enabled) "Makes the device vibrate and flash. May not work on every Venty." else "Connect to change",
+            if (enabled) "Makes it buzz, then shows how close you are" else "Connect to change",
             style = MaterialTheme.typography.bodySmall,
             color = VentyColors.Muted,
         )
+    }
+}
+
+/**
+ * Everything that keeps the link up: Android waking the app when the device turns on, the
+ * device's own "Bluetooth stays on" flag, and the battery-optimisation exemption that stops the
+ * phone killing the background connection.
+ */
+@Composable
+private fun ConnectionRows(
+    kind: DeviceKind,
+    deviceAddress: String?,
+) {
+    val context = LocalContext.current
+    val supported = remember { CompanionLink.isSupported(context) }
+    var observed by remember { mutableStateOf(CompanionLink.observedAddress(context) != null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val confirm = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            CompanionLink.onAssociated(context)
+            observed = true
+            error = null
+        } else {
+            CompanionLink.disassociate(context)
+            observed = false
+        }
+    }
+    SwitchRow(
+        icon = Icons.Rounded.BluetoothSearching,
+        title = "Connect when it turns on",
+        subtitle = when {
+            !supported -> "Needs Android 12 or newer"
+            deviceAddress == null -> "Connect to your ${kind.displayName} once first"
+            error != null -> error!!
+            else -> "Android wakes the app the moment your ${kind.displayName} switches on, even when it's closed"
+        },
+        checked = observed,
+        enabled = supported && (deviceAddress != null || observed),
+        onChange = { on ->
+            if (on && deviceAddress != null) {
+                CompanionLink.associate(
+                    context,
+                    deviceAddress,
+                    onConfirm = { confirm.launch(IntentSenderRequest.Builder(it).build()) },
+                    onError = { error = it },
+                )
+            } else {
+                CompanionLink.disassociate(context)
+                observed = false
+            }
+        },
+    )
+    val power = remember { context.getSystemService(PowerManager::class.java) }
+    var exempt by remember { mutableStateOf(power?.isIgnoringBatteryOptimizations(context.packageName) == true) }
+    LifecycleResumeEffect(Unit) {
+        exempt = power?.isIgnoringBatteryOptimizations(context.packageName) == true
+        onPauseOrDispose { }
+    }
+    if (!exempt) {
+        RowDivider()
+        ActionRow(
+            icon = Icons.Rounded.BatterySaver,
+            title = "Let it run in the background",
+            subtitle = "Stops the phone's battery saver from cutting the connection",
+            onClick = {
+                @SuppressLint("BatteryLife") // Personal app; this is the one-tap version of the same setting.
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                runCatching { context.startActivity(intent) }
+                    .onFailure { runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ActionRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        IconBadge(icon)
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
+        }
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = VentyColors.Muted)
+    }
+}
+
+/** A row of colour swatches; the chosen one grows and gets a ring. */
+@Composable
+private fun AccentRow(selected: Accent, enabled: Boolean, onSelect: (Accent) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .alpha(if (enabled) 1f else 0.5f),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(Icons.Rounded.ColorLens)
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Accent", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    if (enabled) selected.label else "Off while wallpaper colors are on",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VentyColors.Muted,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(start = 38.dp)) {
+            Accent.entries.forEach { a ->
+                val chosen = a == selected
+                val scale by animateFloatAsState(if (chosen) 1.15f else 1f, spring(dampingRatio = 0.5f), label = "swatch")
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .graphicsLayer { scaleX = scale; scaleY = scale }
+                        .clip(CircleShape)
+                        .then(if (chosen) Modifier.border(2.dp, VentyColors.OnSurface, CircleShape) else Modifier)
+                        .clickable(enabled = enabled, role = Role.RadioButton) { onSelect(a) }
+                        .padding(4.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (a == Accent.Device) {
+                                Brush.sweepGradient(listOf(Accent.Ember.heat, Accent.Ice.heat, Accent.Rose.heat, Accent.Blaze.heat, Accent.Ember.heat))
+                            } else {
+                                Brush.linearGradient(listOf(a.heat, a.ember))
+                            },
+                        ),
+                ) {}
+            }
+        }
     }
 }

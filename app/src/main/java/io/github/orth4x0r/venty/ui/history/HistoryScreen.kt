@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -95,6 +96,7 @@ fun HistoryScreen(
     fahrenheit: Boolean,
     onClear: () -> Unit,
     onBack: () -> Unit,
+    onWrapped: () -> Unit = {},
 ) {
     var confirmClear by remember { mutableStateOf(false) }
     val zone = remember { ZoneId.systemDefault() }
@@ -152,6 +154,9 @@ fun HistoryScreen(
                 ) {
                     item(key = "hero") {
                         Hero(lifetimePuffs, sessionsThisWeek, avgPuffs, Modifier.enterFromBelow(0))
+                    }
+                    item(key = "wrapped") {
+                        WrappedTeaser(history, onWrapped, Modifier.enterFromBelow(45))
                     }
                     item(key = "chart") {
                         ChartCard(perDay, today, Modifier.enterFromBelow(90))
@@ -454,8 +459,8 @@ private fun WeekCompare(label: String, thisWeek: Int, lastWeek: Int) {
     val change = percentChange(thisWeek, lastWeek)
     val (delta, tint) = when {
         change == null -> (if (thisWeek > 0) "new" else "-") to VentyColors.Muted
-        change > 0 -> "▲ $change %" to VentyColors.Ready
-        change < 0 -> "▼ ${-change} %" to VentyColors.Warning
+        change > 0 -> "▲ $change%" to VentyColors.Ready
+        change < 0 -> "▼ ${-change}%" to VentyColors.Warning
         else -> "same" to VentyColors.Muted
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -582,3 +587,40 @@ private fun formatDuration(ms: Long): String {
 private fun formatDraw(ms: Long): String =
     if (ms >= 60_000L) "%d:%02d".format(ms / 60_000L, (ms % 60_000L) / 1000L) else "%.1f s".format(Locale.US, ms / 1000.0)
 
+
+/**
+ * The way into the month's recap: the month's own numbers on a plain card, so it reads as part
+ * of History rather than an ad. The figures shimmer to say there's a show behind it.
+ */
+@Composable
+private fun WrappedTeaser(history: List<SessionRecord>, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val zone = remember { ZoneId.systemDefault() }
+    val w = remember(history) {
+        history.firstOrNull()?.let {
+            io.github.orth4x0r.venty.session.wrappedFor(history, java.time.YearMonth.from(java.time.Instant.ofEpochMilli(it.startMs).atZone(zone)), zone)
+        }
+    } ?: return
+    val name = w.month.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
+    val shimmer = io.github.orth4x0r.venty.ui.shimmerBrush(listOf(VentyColors.Heat, VentyColors.Ember), enabled = true)
+    val figure = MaterialTheme.typography.headlineSmall.let { st -> shimmer?.let { st.copy(brush = it) } ?: st.copy(color = VentyColors.Heat) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(io.github.orth4x0r.venty.ui.theme.VentyShapes.Large)
+            .background(VentyColors.Surface.copy(alpha = 0.82f))
+            .clickable(onClickLabel = "Open $name in numbers", onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("$name in numbers", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("${w.sessions}", style = figure)
+                Text(if (w.sessions == 1) " session  " else " sessions  ", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
+                Text("${w.puffs}", style = figure)
+                Text(if (w.puffs == 1) " puff" else " puffs", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
+            }
+        }
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = VentyColors.Muted)
+    }
+}
