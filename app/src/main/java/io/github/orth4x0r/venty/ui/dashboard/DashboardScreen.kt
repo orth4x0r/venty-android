@@ -26,6 +26,7 @@ import io.github.orth4x0r.venty.session.estimateBatteryForecast
 import io.github.orth4x0r.venty.ui.HeatAura
 import io.github.orth4x0r.venty.ui.HeatHaptics
 import io.github.orth4x0r.venty.ui.LavaLayer
+import io.github.orth4x0r.venty.ui.fadeEdges
 import io.github.orth4x0r.venty.ui.findmy.FindMyScreen
 import io.github.orth4x0r.venty.ui.heatProgress
 import io.github.orth4x0r.venty.ui.wrapped.WrappedScreen
@@ -46,6 +47,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.geometry.CornerRadius
@@ -164,6 +166,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.orth4x0r.venty.ble.ConnectionState
@@ -743,18 +746,23 @@ private fun Dashboard(
         onDrag = onDialDrag,
         range = kind.targetRange,
     ) {
-        Text(
-            when {
-                dragDisplay != null -> "Set to"
-                current != null -> "Now"
-                !heating -> "Target"
-                // The pill already says Ready.
-                s.setpointReached -> "Holding"
-                else -> "Heating to"
-            },
-            style = MaterialTheme.typography.labelLarge,
-            color = VentyColors.Muted,
-        )
+        // A puff ring is taller than the auto-off line it stands in for, so while it shows, the
+        // label above the number goes too; otherwise the column outgrows the dial into the arc.
+        val puffing = live?.puffStartMs != null
+        AnimatedVisibility(visible = !puffing, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+            Text(
+                when {
+                    dragDisplay != null -> "Set to"
+                    current != null -> "Now"
+                    !heating -> "Target"
+                    // The pill already says Ready.
+                    s.setpointReached -> "Holding"
+                    else -> "Heating to"
+                },
+                style = MaterialTheme.typography.labelLarge,
+                color = VentyColors.Muted,
+            )
+        }
         BigTemperature(
             value = dragDisplay ?: Temperature.toDisplay(current ?: s.effectiveTargetTenths, f),
             unit = unit,
@@ -775,7 +783,7 @@ private fun Dashboard(
         }
         StatusPill(phase, s)
         PuffTimer(startMs = live?.puffStartMs, targetMs = puffTargetMs, buzz = puffBuzz)
-        if (s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
+        if (!puffing && s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
             Spacer(Modifier.height(10.dp))
             Text(
                 "Auto-off in ${s.autoOffSeconds / 60}:${"%02d".format(s.autoOffSeconds % 60)}",
@@ -894,11 +902,13 @@ private fun PresetsRow(
     // scrolling one out of view and back doesn't replay it.
     val popped = remember { HashSet<Int>().apply { keyed.forEach { add(it.first) } } }
     val exists = presets.any { it.tenthsC == s.targetTenths }
+    val rowState = rememberLazyListState()
     LazyRow(
+        state = rowState,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         // Room above and below for the selected chip's glow, which the list would clip.
         contentPadding = PaddingValues(vertical = 10.dp),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().fadeEdges(rowState),
     ) {
         items(keyed, key = { it.first }) { (id, p) ->
             val selected = p.tenthsC == s.targetTenths
@@ -1064,7 +1074,7 @@ private fun BatteryCard(s: VentyStatus, samples: List<BatterySample>, history: L
                     Text(
                         when {
                             s.charging -> "Charging"
-                            estimate != null -> "About ${estimate.toInt()} h ${((estimate % 1) * 60).toInt()} m left at this pace"
+                            estimate != null -> "About ${hoursAndMinutes((estimate * 60).toInt())} left at this pace"
                             else -> "Learning your drain rate…"
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -1111,7 +1121,7 @@ private fun SessionForecast(f: BatteryForecast, color: Color) {
             }
             f.heatingMinutesLeft?.let { m ->
                 Text(
-                    "About ${if (m >= 90) "${m / 60} h ${m % 60} m" else "$m min"} of heating left",
+                    "About ${hoursAndMinutes(m)} of heating left",
                     style = style,
                     color = VentyColors.Muted,
                 )
@@ -1627,12 +1637,18 @@ private fun TopBar(
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
+        // The advertised name ("S&B VY___JP4") wraps next to the actions, so the title is the model
+        // and the unit's own tag rides along with the connection state.
+        val tag = name.removePrefix("S&B").trim().takeIf { it.isNotEmpty() && it != kind.displayName }
+        val state = if (demo) "Demo mode, no device" else if (status != null) "Connected" else "Connecting"
         Column(Modifier.weight(1f)) {
-            Text(name, style = MaterialTheme.typography.titleLarge)
+            Text(kind.displayName, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                if (demo) "Demo mode, no device" else if (status != null) "Connected" else "Connecting",
+                if (tag != null && !demo) "$state · $tag" else state,
                 style = MaterialTheme.typography.bodySmall,
                 color = VentyColors.Muted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         if (status != null && kind.hasBattery) BatteryBadge(status.battery, status.charging)
@@ -1732,3 +1748,7 @@ internal fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit
             .padding(20.dp),
     ) { content() }
 }
+
+/** "45 min" under an hour and a half, "2 h 10 min" from there, so short spans don't read "0 h 53 m". */
+private fun hoursAndMinutes(minutes: Int): String =
+    if (minutes < 90) "$minutes min" else "${minutes / 60} h ${minutes % 60} min"

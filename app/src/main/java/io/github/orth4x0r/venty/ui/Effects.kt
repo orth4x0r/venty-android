@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
@@ -425,3 +426,29 @@ fun shimmerBrush(colors: List<Color>, enabled: Boolean): Brush? {
         end = Offset(x + 400f, 200f),
     )
 }
+
+/**
+ * Fades out whichever end of a horizontal list still has items past it, so a row of chips cut off
+ * at the card edge reads as "scrolls" rather than "clipped".
+ */
+fun Modifier.fadeEdges(state: androidx.compose.foundation.lazy.LazyListState, width: androidx.compose.ui.unit.Dp = 28.dp): Modifier =
+    graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            val w = width.toPx()
+            if (state.canScrollBackward) {
+                drawRect(
+                    Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), startX = 0f, endX = w),
+                    size = androidx.compose.ui.geometry.Size(w, size.height),
+                    blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+                )
+            }
+            if (state.canScrollForward) {
+                drawRect(
+                    Brush.horizontalGradient(listOf(Color.Black, Color.Transparent), startX = size.width - w, endX = size.width),
+                    topLeft = Offset(size.width - w, 0f),
+                    size = androidx.compose.ui.geometry.Size(w, size.height),
+                    blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+                )
+            }
+        }

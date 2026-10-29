@@ -459,8 +459,8 @@ private fun WeekCompare(label: String, thisWeek: Int, lastWeek: Int) {
     val change = percentChange(thisWeek, lastWeek)
     val (delta, tint) = when {
         change == null -> (if (thisWeek > 0) "new" else "-") to VentyColors.Muted
-        change > 0 -> "▲ $change %" to VentyColors.Ready
-        change < 0 -> "▼ ${-change} %" to VentyColors.Warning
+        change > 0 -> "▲ $change%" to VentyColors.Ready
+        change < 0 -> "▼ ${-change}%" to VentyColors.Warning
         else -> "same" to VentyColors.Muted
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {

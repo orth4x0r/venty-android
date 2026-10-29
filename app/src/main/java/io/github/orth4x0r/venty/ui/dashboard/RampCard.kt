@@ -9,6 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.input.pointer.pointerInput
 import io.github.orth4x0r.venty.session.RampProfile
@@ -86,6 +87,7 @@ import io.github.orth4x0r.venty.session.RampPlan
 import io.github.orth4x0r.venty.session.RampRun
 import io.github.orth4x0r.venty.ui.RollingNumber
 import io.github.orth4x0r.venty.ui.Temperature
+import io.github.orth4x0r.venty.ui.fadeEdges
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlin.math.roundToInt
@@ -284,10 +286,12 @@ private fun ProfileChips(
 ) {
     val haptics = LocalHapticFeedback.current
     val saved = profiles.any { it.plan == plan }
+    val rowState = rememberLazyListState()
     LazyRow(
+        state = rowState,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(vertical = 4.dp),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().fadeEdges(rowState),
     ) {
         items(profiles, key = { "${it.name}|${it.plan}" }) { profile ->
             val selected = profile.plan == plan

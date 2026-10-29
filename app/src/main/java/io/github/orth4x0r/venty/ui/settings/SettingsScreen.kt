@@ -238,7 +238,7 @@ fun SettingsScreen(
                 SwitchRow(
                     icon = Icons.Rounded.BatteryChargingFull,
                     title = "Eco voltage limit",
-                    subtitle = "Stops charging at about 90 %",
+                    subtitle = "Stops charging at about 90%",
                     checked = status?.ecoVoltageLimit == true,
                     enabled = hasStatus,
                     onChange = onEcoVoltage,
@@ -248,12 +248,12 @@ fun SettingsScreen(
                     icon = Icons.Rounded.NotificationsActive,
                     title = "Low battery alert",
                     subtitle = "Notify me when the battery drops to this level",
-                    valueLabel = if (appPrefs.lowBatteryAlertPercent <= 0) "Off" else "${appPrefs.lowBatteryAlertPercent} %",
+                    valueLabel = if (appPrefs.lowBatteryAlertPercent <= 0) "Off" else "${appPrefs.lowBatteryAlertPercent}%",
                     value = appPrefs.lowBatteryAlertPercent.toFloat(),
                     range = 0f..50f,
                     steps = 9,
                     enabled = true,
-                    labelFor = { if (it.roundToInt() <= 0) "Off" else "${it.roundToInt()} %" },
+                    labelFor = { if (it.roundToInt() <= 0) "Off" else "${it.roundToInt()}%" },
                     onCommit = { onAppPrefs(appPrefs.copy(lowBatteryAlertPercent = it.roundToInt())) },
                 )
             }
@@ -364,7 +364,7 @@ fun SettingsScreen(
 
 /** The Venty shows brightness 1-9; the Volcano's is a percentage, so show what it will get. */
 private fun brightnessLabel(kind: DeviceKind, level: Int): String =
-    if (kind == DeviceKind.Volcano) "${VolcanoProtocol.levelToBrightness(level)} %" else level.toString()
+    if (kind == DeviceKind.Volcano) "${VolcanoProtocol.levelToBrightness(level)}%" else level.toString()
 
 @Composable
 private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
