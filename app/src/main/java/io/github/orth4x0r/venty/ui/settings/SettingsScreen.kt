@@ -132,6 +132,9 @@ fun SettingsScreen(
     onBack: () -> Unit,
     /** The saved device's address, for "connect when it turns on". */
     deviceAddress: String? = null,
+    /** Drops the link while Android's auto-connect dialog looks for the device, then restores it. */
+    onPairingHold: () -> Unit = {},
+    onPairingDone: () -> Unit = {},
 ) {
     val hasStatus = status != null
     val hasSettings = deviceSettings != null
@@ -324,7 +327,7 @@ fun SettingsScreen(
 
         SectionHeader("Connection", Modifier.enterFromBelow(392))
         SettingsCard(Modifier.enterFromBelow(400)) {
-            ConnectionRows(kind, deviceAddress)
+            ConnectionRows(kind, deviceAddress, deviceName, onPairingHold, onPairingDone)
         }
 
         SectionHeader("Device", Modifier.enterFromBelow(410))
@@ -577,14 +580,18 @@ private fun FindMyButton(enabled: Boolean, onClick: () -> Unit) {
 private fun ConnectionRows(
     kind: DeviceKind,
     deviceAddress: String?,
+    deviceName: String?,
+    onPairingHold: () -> Unit,
+    onPairingDone: () -> Unit,
 ) {
     val context = LocalContext.current
     val supported = remember { CompanionLink.isSupported(context) }
     var observed by remember { mutableStateOf(CompanionLink.observedAddress(context) != null) }
     var error by remember { mutableStateOf<String?>(null) }
     val confirm = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        onPairingDone()
         if (result.resultCode == Activity.RESULT_OK) {
-            CompanionLink.onAssociated(context)
+            CompanionLink.onAssociated(context, result.data)
             observed = true
             error = null
         } else {
@@ -599,17 +606,25 @@ private fun ConnectionRows(
             !supported -> "Needs Android 12 or newer"
             deviceAddress == null -> "Connect to your ${kind.displayName} once first"
             error != null -> error!!
-            else -> "Android wakes the app the moment your ${kind.displayName} switches on, even when it's closed"
+            observed -> "Android wakes the app when your ${kind.displayName} switches on, even when it's closed (not after Force stop)"
+            else -> "Disconnects for a moment so Android can find your ${kind.displayName}, then wakes the app whenever it switches on"
         },
         checked = observed,
         enabled = supported && (deviceAddress != null || observed),
         onChange = { on ->
             if (on && deviceAddress != null) {
+                // The Venty only advertises while nothing is connected to it, and the dialog
+                // can't see it otherwise: let go of the link until the dialog closes.
+                onPairingHold()
                 CompanionLink.associate(
                     context,
                     deviceAddress,
+                    deviceName,
                     onConfirm = { confirm.launch(IntentSenderRequest.Builder(it).build()) },
-                    onError = { error = it },
+                    onError = {
+                        onPairingDone()
+                        error = it
+                    },
                 )
             } else {
                 CompanionLink.disassociate(context)

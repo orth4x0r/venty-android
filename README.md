@@ -66,6 +66,7 @@ All captured in the built-in demo mode, no device needed.
 - Normal / Boost / Super selector that shows where each mode will land
 - Find my device, °C / °F, brightness, vibration, eco charging and boost timeout
 - Auto-reconnect with backoff, and a foreground service that keeps the link alive in the background
+- "Connect when it turns on" (Android 12+): Android wakes the app when your device starts advertising, even after you swipe it away. Not after **Force stop**, though: Android keeps a force-stopped app asleep until you open it again, so swipe it away instead
 
 **Sessions**
 

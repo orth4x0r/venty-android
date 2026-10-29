@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -49,6 +50,7 @@ private const val RAMP_TICK_MS = 500L
 private const val RAMP_HEATER_ON_TIMEOUT_MS = 15_000L
 /** Direct connects tried before handing over to a background (autoConnect) request. */
 private const val DIRECT_ATTEMPTS = 2
+private const val PAIRING_HOLD_MAX_MS = 3 * 60_000L
 
 data class FoundDevice(
     val address: String,
@@ -135,6 +137,13 @@ class VentyController(context: Context) {
     private var boostWriteJob: Job? = null
     private var superBoostWriteJob: Job? = null
     @Volatile private var link: VentyLink? = null
+
+    /**
+     * True while Android's companion device dialog is looking for the device. The Venty stops
+     * advertising while it's connected, so the dialog can only find it once the link is let go.
+     */
+    private val heldForPairing = MutableStateFlow(false)
+    private var holdTimeoutJob: Job? = null
     @Volatile private var lastStatusAt = 0L
     @Volatile private var deviceStatus: VentyStatus? = null
     /** The base target while in plain heating mode, restored when leaving boost. */
@@ -246,6 +255,27 @@ class VentyController(context: Context) {
         }
     }
 
+    /**
+     * Drops the link (without forgetting the device) so it advertises again and the companion
+     * device dialog can see it. The session waits until [releasePairingHold], or a few minutes
+     * at most, before it reconnects.
+     */
+    fun holdForPairing() {
+        heldForPairing.value = true
+        holdTimeoutJob?.cancel()
+        holdTimeoutJob = scope.launch {
+            delay(PAIRING_HOLD_MAX_MS)
+            heldForPairing.value = false
+        }
+    }
+
+    /** The companion device dialog is done: reconnect as usual. */
+    fun releasePairingHold() {
+        holdTimeoutJob?.cancel()
+        holdTimeoutJob = null
+        heldForPairing.value = false
+    }
+
     /** The saved device's address, for the companion device association. */
     val lastDeviceAddress: String? get() = prefs.getString(KEY_ADDRESS, null)
 
@@ -266,6 +296,7 @@ class VentyController(context: Context) {
     fun startVolcanoDemo() = startSession("Demo Volcano", demo = true, kind = DeviceKind.Volcano) { DemoVolcanoLink() }
 
     fun forgetDevice() {
+        releasePairingHold()
         prefs.edit().clear().apply()
         io.github.orth4x0r.venty.companion.CompanionLink.disassociate(appContext)
         disconnect()
@@ -299,6 +330,10 @@ class VentyController(context: Context) {
                     ConnectionState.Connecting(name)
                 } else {
                     ConnectionState.Reconnecting(name, attempt, lastError)
+                }
+                if (heldForPairing.value) {
+                    logLink("Letting go so Android can find the ${kind.displayName}")
+                    heldForPairing.first { !it }
                 }
                 try {
                     val l = open(attempt)
@@ -345,6 +380,7 @@ class VentyController(context: Context) {
         var lastNudgeAt = 0L
         while (true) {
             delay(POLL_INTERVAL_MS)
+            if (heldForPairing.value && !demo) throw LinkLostException("Paused for auto-connect setup")
             if (!announced && deviceStatus != null) {
                 announced = true
                 logLink("Connected")

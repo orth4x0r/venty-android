@@ -1,17 +1,22 @@
 package io.github.orth4x0r.venty.companion
 
 import android.annotation.SuppressLint
-import android.bluetooth.le.ScanFilter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.le.ScanResult
 import android.companion.AssociationInfo
 import android.companion.AssociationRequest
 import android.companion.BluetoothLeDeviceFilter
 import android.companion.CompanionDeviceManager
 import android.companion.ObservingDevicePresenceRequest
 import android.content.Context
+import android.content.Intent
 import android.content.IntentSender
 import android.os.Build
 import android.util.Log
+import io.github.orth4x0r.venty.ble.VentyProtocol
+import io.github.orth4x0r.venty.ble.VolcanoProtocol
 import java.util.concurrent.Executor
+import java.util.regex.Pattern
 
 private const val TAG = "CompanionLink"
 
@@ -38,17 +43,36 @@ object CompanionLink {
         prefs(context).getString(KEY_ADDRESS, null)?.takeIf { isAssociated(context, it) }
 
     /**
-     * Asks Android to associate [address]. Android answers with a confirmation dialog, which the
-     * caller launches from [onConfirm]; after the user accepts, call [onAssociated].
+     * Asks Android to associate the device called [name] at [address]. Android answers with a
+     * dialog that scans for it, which the caller launches from [onConfirm]; after the user
+     * accepts, call [onAssociated]. The device must be advertising, so drop any open link first.
+     *
+     * The dialog matches on the advertised name (`S&B VY` plus the serial, so it's unique) rather
+     * than on the address: an address `ScanFilter` is treated as a public address on Android 13+,
+     * and some phones' hardware filters then never match a device with a random address.
      */
-    fun associate(context: Context, address: String, onConfirm: (IntentSender) -> Unit, onError: (String) -> Unit) {
+    fun associate(
+        context: Context,
+        address: String,
+        name: String?,
+        onConfirm: (IntentSender) -> Unit,
+        onError: (String) -> Unit,
+    ) {
         val cdm = context.getSystemService(CompanionDeviceManager::class.java) ?: return onError("Not supported on this phone")
+        // Only a real advertised name narrows it to this one device; a placeholder like "Venty"
+        // falls back to any Storz & Bickel device, and the user picks theirs in the dialog.
+        val advertised = name?.trim()?.takeIf { VentyProtocol.isVentyName(it) || VolcanoProtocol.isVolcanoName(it) }
+        val pattern = if (advertised != null) {
+            Pattern.compile(".*" + Pattern.quote(advertised) + ".*")
+        } else {
+            Pattern.compile("(?i).*(S&B VY|S&B VZ|VOLCANO).*")
+        }
         val filter = BluetoothLeDeviceFilter.Builder()
-            .setScanFilter(ScanFilter.Builder().setDeviceAddress(address).build())
+            .setNamePattern(pattern)
             .build()
         val request = AssociationRequest.Builder()
             .addDeviceFilter(filter)
-            .setSingleDevice(true)
+            .setSingleDevice(advertised != null)
             .build()
         val callback = object : CompanionDeviceManager.Callback() {
             // API 33+
@@ -60,7 +84,9 @@ object CompanionLink {
 
             // API 33+: the id is what Android 16 wants for presence observing.
             override fun onAssociationCreated(associationInfo: AssociationInfo) {
-                prefs(context).edit().putInt(KEY_ID, associationInfo.id).apply()
+                val edit = prefs(context).edit().putInt(KEY_ID, associationInfo.id)
+                associationInfo.deviceMacAddress?.toString()?.uppercase()?.let { edit.putString(KEY_ADDRESS, it) }
+                edit.apply()
             }
 
             override fun onFailure(error: CharSequence?) = onError(error?.toString() ?: "Couldn't set up auto-connect")
@@ -74,10 +100,14 @@ object CompanionLink {
         }
     }
 
-    /** The user accepted the dialog: start watching for the device. */
+    /**
+     * The user accepted the dialog: start watching for the device. [result] is the dialog's
+     * result intent; before Android 13 it's the only place that says which device was picked.
+     */
     @SuppressLint("MissingPermission") // REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE is a normal permission.
-    fun onAssociated(context: Context) {
+    fun onAssociated(context: Context, result: Intent?) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        pickedAddress(result)?.let { prefs(context).edit().putString(KEY_ADDRESS, it).apply() }
         val address = prefs(context).getString(KEY_ADDRESS, null) ?: return
         val cdm = context.getSystemService(CompanionDeviceManager::class.java) ?: return
         runCatching {
@@ -117,6 +147,17 @@ object CompanionLink {
             }.onFailure { Log.w(TAG, "disassociate failed", it) }
         }
         prefs(context).edit().clear().apply()
+    }
+
+    private fun pickedAddress(result: Intent?): String? {
+        if (result == null) return null
+        @Suppress("DEPRECATION")
+        val picked: Any? = result.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE)
+        return when (picked) {
+            is ScanResult -> picked.device.address
+            is BluetoothDevice -> picked.address
+            else -> null
+        }?.uppercase()
     }
 
     private fun isAssociated(context: Context, address: String): Boolean {
