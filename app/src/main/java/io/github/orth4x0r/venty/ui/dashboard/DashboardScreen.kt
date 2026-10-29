@@ -148,6 +148,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1730,18 +1731,45 @@ private fun TopBar(
     var menu by remember { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
         // The advertised name ("S&B VY___JP4") wraps next to the actions, so the title is the model
-        // and the unit's own tag rides along with the connection state.
+        // and the unit's own tag sits under it. A dot says connected (breathing while it connects)
+        // instead of a word, which left no room for the tag beside the battery and three icons.
         val tag = name.removePrefix("S&B").trim().takeIf { it.isNotEmpty() && it != kind.displayName }
-        val state = if (demo) "Demo mode, no device" else if (status != null) "Connected" else "Connecting"
+        val connected = status != null
+        val dotAlpha = if (connected || demo) {
+            1f
+        } else {
+            val breathe by rememberInfiniteTransition(label = "connectDot").animateFloat(
+                initialValue = 0.3f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+                label = "connectDotA",
+            )
+            breathe
+        }
+        val dotColor by animateColorAsState(if (connected && !demo) VentyColors.Ready else VentyColors.Muted, label = "connectDotC")
         Column(Modifier.weight(1f)) {
             Text(kind.displayName, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                if (tag != null && !demo) "$state · $tag" else state,
-                style = MaterialTheme.typography.bodySmall,
-                color = VentyColors.Muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(6.dp).graphicsLayer { alpha = dotAlpha }.clip(CircleShape).background(dotColor))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    when {
+                        demo -> "Demo mode"
+                        tag != null -> tag
+                        connected -> "Connected"
+                        else -> "Connecting…"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VentyColors.Muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics {
+                        // The dot carries the state visually; say it out loud too.
+                        val state = if (demo) "Demo mode, no device" else if (connected) "Connected" else "Connecting"
+                        contentDescription = if (tag != null && !demo) "$state, $tag" else state
+                    },
+                )
+            }
         }
         if (status != null && kind.hasBattery) BatteryBadge(status.battery, status.charging)
         IconButton(onClick = onHistory) { Icon(Icons.Rounded.BarChart, "History") }
