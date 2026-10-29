@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +71,7 @@ import io.github.orth4x0r.venty.session.weeklyBuckets
 import io.github.orth4x0r.venty.ui.RollingNumber
 import io.github.orth4x0r.venty.ui.enterFromBelow
 import io.github.orth4x0r.venty.ui.theme.VentyColors
+import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -94,6 +96,7 @@ fun HistoryScreen(
     fahrenheit: Boolean,
     onClear: () -> Unit,
     onBack: () -> Unit,
+    onWrapped: () -> Unit = {},
 ) {
     var confirmClear by remember { mutableStateOf(false) }
     val zone = remember { ZoneId.systemDefault() }
@@ -152,6 +155,9 @@ fun HistoryScreen(
                     item(key = "hero") {
                         Hero(lifetimePuffs, sessionsThisWeek, avgPuffs, Modifier.enterFromBelow(0))
                     }
+                    item(key = "wrapped") {
+                        WrappedTeaser(history, onWrapped, Modifier.enterFromBelow(45))
+                    }
                     item(key = "chart") {
                         ChartCard(perDay, today, Modifier.enterFromBelow(90))
                     }
@@ -160,11 +166,10 @@ fun HistoryScreen(
                     }
                     item(key = "label") {
                         Text(
-                            "SESSIONS",
-                            style = MaterialTheme.typography.labelSmall,
+                            "Sessions",
+                            style = MaterialTheme.typography.titleSmall,
                             color = VentyColors.Muted,
-                            letterSpacing = 1.5.sp,
-                            modifier = Modifier.enterFromBelow(160).padding(top = 8.dp, start = 4.dp),
+                            modifier = Modifier.enterFromBelow(160).padding(top = 16.dp, start = 4.dp),
                         )
                     }
                     itemsIndexed(history, key = { _, r -> r.startMs }) { i, r ->
@@ -205,16 +210,11 @@ private fun EmptyState(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier.size(88.dp).background(VentyColors.Heat.copy(alpha = 0.12f), RoundedCornerShape(50)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Icons.Rounded.History, contentDescription = null, tint = VentyColors.Heat, modifier = Modifier.size(44.dp))
-        }
-        Spacer(Modifier.height(20.dp))
+        Text("No sessions yet", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(6.dp))
         Text(
-            "No sessions yet. Heat up your device and they'll show up here.",
-            style = MaterialTheme.typography.bodyLarge,
+            "Heat up and each session lands here, with its puffs and how long it took.",
+            style = MaterialTheme.typography.bodyMedium,
             color = VentyColors.Muted,
             textAlign = TextAlign.Center,
         )
@@ -226,28 +226,34 @@ private fun Hero(lifetimePuffs: Int, sessionsThisWeek: Int, avgPuffs: Double, mo
     // Start at zero and roll up to the real value on entry.
     var shown by remember { mutableIntStateOf(0) }
     LaunchedEffect(lifetimePuffs) { shown = lifetimePuffs }
-    val shape = RoundedCornerShape(24.dp)
     Column(
         modifier
             .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(listOf(VentyColors.Heat.copy(alpha = 0.16f), VentyColors.Surface.copy(alpha = 0.7f))),
-                shape,
-            )
-            .border(1.dp, VentyColors.Track, shape)
+            .background(VentyColors.Surface.copy(alpha = 0.82f), VentyShapes.Large)
             .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("LIFETIME PUFFS", style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted, letterSpacing = 1.5.sp)
-        RollingNumber(
-            value = shown,
-            style = MaterialTheme.typography.displayLarge.copy(fontSize = 72.sp),
-            color = VentyColors.Heat,
-        )
-        Spacer(Modifier.height(12.dp))
+        if (lifetimePuffs > 0) {
+            RollingNumber(
+                value = shown,
+                style = MaterialTheme.typography.displayLarge.copy(fontSize = 80.sp, lineHeight = 80.sp),
+                color = VentyColors.Heat,
+            )
+            Text("puffs, all time", style = MaterialTheme.typography.bodyMedium, color = VentyColors.Muted)
+        } else {
+            // A giant 0 says nothing; say why instead.
+            Text("No puffs counted yet", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "They're counted from the airflow sensor while the heater is on.",
+                style = MaterialTheme.typography.bodySmall,
+                color = VentyColors.Muted,
+                textAlign = TextAlign.Center,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             MiniStat(sessionsThisWeek.toString(), "sessions this week")
-            MiniStat("%.1f".format(Locale.US, avgPuffs), "avg puffs / session")
+            if (avgPuffs > 0) MiniStat("%.1f".format(Locale.US, avgPuffs), "puffs per session")
         }
     }
 }
@@ -255,8 +261,8 @@ private fun Hero(lifetimePuffs: Int, sessionsThisWeek: Int, avgPuffs: Double, mo
 @Composable
 private fun MiniStat(value: String, label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.headlineMedium, color = VentyColors.Ember)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted)
+        Text(value, style = MaterialTheme.typography.headlineMedium, color = VentyColors.OnSurface)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
     }
 }
 
@@ -272,21 +278,18 @@ private fun ChartCard(perDay: List<Int>, today: LocalDate, modifier: Modifier = 
             }
         }
     }
-    val shape = RoundedCornerShape(20.dp)
     val max = (perDay.maxOrNull() ?: 0).coerceAtLeast(1)
     Column(
         modifier
             .fillMaxWidth()
-            .background(VentyColors.Surface.copy(alpha = 0.7f), shape)
-            .border(1.dp, VentyColors.Track, shape)
-            .padding(16.dp),
+            .background(VentyColors.Surface.copy(alpha = 0.82f), VentyShapes.Large)
+            .padding(20.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "PUFFS PER DAY",
-                style = MaterialTheme.typography.labelSmall,
+                "Puffs per day",
+                style = MaterialTheme.typography.titleSmall,
                 color = VentyColors.Muted,
-                letterSpacing = 1.5.sp,
                 modifier = Modifier.weight(1f),
             )
             Text("peak $max", style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted)
@@ -361,7 +364,6 @@ private fun WeeklyTrendCard(weeks: List<WeekBucket>, modifier: Modifier = Modifi
             }
         }
     }
-    val shape = RoundedCornerShape(20.dp)
     val maxPuffs = (weeks.maxOfOrNull { it.puffs } ?: 0).coerceAtLeast(1)
     val maxSessions = (weeks.maxOfOrNull { it.sessions } ?: 0).coerceAtLeast(1)
     val current = weeks.lastOrNull()
@@ -369,16 +371,14 @@ private fun WeeklyTrendCard(weeks: List<WeekBucket>, modifier: Modifier = Modifi
     Column(
         modifier
             .fillMaxWidth()
-            .background(VentyColors.Surface.copy(alpha = 0.7f), shape)
-            .border(1.dp, VentyColors.Track, shape)
-            .padding(16.dp),
+            .background(VentyColors.Surface.copy(alpha = 0.82f), VentyShapes.Large)
+            .padding(20.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "WEEKLY TREND",
-                style = MaterialTheme.typography.labelSmall,
+                "Weekly trend",
+                style = MaterialTheme.typography.titleSmall,
                 color = VentyColors.Muted,
-                letterSpacing = 1.5.sp,
                 modifier = Modifier.weight(1f),
             )
             LegendDot(VentyColors.Heat, "puffs")
@@ -459,21 +459,18 @@ private fun WeekCompare(label: String, thisWeek: Int, lastWeek: Int) {
     val change = percentChange(thisWeek, lastWeek)
     val (delta, tint) = when {
         change == null -> (if (thisWeek > 0) "new" else "-") to VentyColors.Muted
-        change > 0 -> "▲ $change %" to VentyColors.Ready
-        change < 0 -> "▼ ${-change} %" to VentyColors.Warning
+        change > 0 -> "▲ $change%" to VentyColors.Ready
+        change < 0 -> "▼ ${-change}%" to VentyColors.Warning
         else -> "same" to VentyColors.Muted
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        RollingNumber(value = shown, style = MaterialTheme.typography.headlineMedium, color = VentyColors.Ember)
-        Text("$label this week", style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted)
+        RollingNumber(value = shown, style = MaterialTheme.typography.headlineMedium, color = VentyColors.OnSurface)
+        Text("$label this week", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
         Spacer(Modifier.height(4.dp))
         Text(
             delta,
             style = MaterialTheme.typography.labelMedium,
             color = tint,
-            modifier = Modifier
-                .background(tint.copy(alpha = 0.14f), RoundedCornerShape(50))
-                .padding(horizontal = 8.dp, vertical = 2.dp),
         )
         Text("vs $lastWeek last week", style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted)
     }
@@ -481,7 +478,7 @@ private fun WeekCompare(label: String, thisWeek: Int, lastWeek: Int) {
 
 @Composable
 private fun SessionRow(r: SessionRecord, zone: ZoneId, fahrenheit: Boolean, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = VentyShapes.Small
     val start = Instant.ofEpochMilli(r.startMs).atZone(zone)
     val duration = formatDuration(r.durationMs)
     var expanded by remember { mutableStateOf(false) }
@@ -494,8 +491,7 @@ private fun SessionRow(r: SessionRecord, zone: ZoneId, fahrenheit: Boolean, modi
         modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(VentyColors.SurfaceHigh.copy(alpha = 0.7f), shape)
-            .border(1.dp, VentyColors.Track, shape)
+            .background(VentyColors.Surface.copy(alpha = 0.82f), shape)
             .clickable { expanded = !expanded }
             .animateContentSize(spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow))
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -513,24 +509,22 @@ private fun SessionRow(r: SessionRecord, zone: ZoneId, fahrenheit: Boolean, modi
                     style = MaterialTheme.typography.bodySmall,
                     color = VentyColors.Muted,
                 )
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (r.boosted) {
-                        Badge("Boost", VentyColors.Boost) {
-                            Icon(Icons.Rounded.Bolt, contentDescription = null, modifier = Modifier.size(12.dp), tint = VentyColors.Boost)
+                // Plain words, not badges: boost in its own colour is enough to spot it.
+                if (r.boosted || r.heatUpSeconds != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Row {
+                        if (r.boosted) {
+                            Text("Boosted", style = MaterialTheme.typography.bodySmall, color = VentyColors.Boost)
+                            if (r.heatUpSeconds != null) Text(" · ", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
                         }
-                    }
-                    if (r.heatUpSeconds != null) {
-                        Badge("${r.heatUpSeconds} s heat-up", VentyColors.Cool) {
-                            Icon(Icons.Rounded.Timer, contentDescription = null, modifier = Modifier.size(12.dp), tint = VentyColors.Cool)
-                        }
+                        r.heatUpSeconds?.let { Text("ready in $it s", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted) }
                     }
                 }
             }
             Spacer(Modifier.width(12.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(r.puffs.toString(), style = MaterialTheme.typography.headlineMedium, color = VentyColors.Heat)
-                Text("puffs", style = MaterialTheme.typography.labelSmall, color = VentyColors.Muted)
+                Text(if (r.puffs == 1) "puff" else "puffs", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
             }
             Icon(
                 Icons.Rounded.ExpandMore,
@@ -593,16 +587,40 @@ private fun formatDuration(ms: Long): String {
 private fun formatDraw(ms: Long): String =
     if (ms >= 60_000L) "%d:%02d".format(ms / 60_000L, (ms % 60_000L) / 1000L) else "%.1f s".format(Locale.US, ms / 1000.0)
 
+
+/**
+ * The way into the month's recap: the month's own numbers on a plain card, so it reads as part
+ * of History rather than an ad. The figures shimmer to say there's a show behind it.
+ */
 @Composable
-private fun Badge(text: String, color: androidx.compose.ui.graphics.Color, icon: @Composable () -> Unit) {
+private fun WrappedTeaser(history: List<SessionRecord>, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val zone = remember { ZoneId.systemDefault() }
+    val w = remember(history) {
+        history.firstOrNull()?.let {
+            io.github.orth4x0r.venty.session.wrappedFor(history, java.time.YearMonth.from(java.time.Instant.ofEpochMilli(it.startMs).atZone(zone)), zone)
+        }
+    } ?: return
+    val name = w.month.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
+    val shimmer = io.github.orth4x0r.venty.ui.shimmerBrush(listOf(VentyColors.Heat, VentyColors.Ember), enabled = true)
+    val figure = MaterialTheme.typography.headlineSmall.let { st -> shimmer?.let { st.copy(brush = it) } ?: st.copy(color = VentyColors.Heat) }
     Row(
-        Modifier
-            .background(color.copy(alpha = 0.14f), RoundedCornerShape(50))
-            .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(io.github.orth4x0r.venty.ui.theme.VentyShapes.Large)
+            .background(VentyColors.Surface.copy(alpha = 0.82f))
+            .clickable(onClickLabel = "Open $name in numbers", onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 16.dp),
     ) {
-        icon()
-        Text(text, style = MaterialTheme.typography.labelSmall, color = color)
+        Column(Modifier.weight(1f)) {
+            Text("$name in numbers", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("${w.sessions}", style = figure)
+                Text(if (w.sessions == 1) " session  " else " sessions  ", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
+                Text("${w.puffs}", style = figure)
+                Text(if (w.puffs == 1) " puff" else " puffs", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted, modifier = Modifier.padding(bottom = 3.dp))
+            }
+        }
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = VentyColors.Muted)
     }
 }

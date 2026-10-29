@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "venty-android"
 include(":app")
+include(":wear")

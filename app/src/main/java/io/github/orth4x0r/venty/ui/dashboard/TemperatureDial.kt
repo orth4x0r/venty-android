@@ -355,22 +355,27 @@ fun TemperatureDial(
                         }
                     }
                 }
-                // Target marker: a ring sitting on the track.
+                // Target marker: a hot bead on the track in the dial's colour, with a dark core
+                // like a pilot light. It always glows a little and flares while dragged.
                 .drawWithCache {
                     val g = DialGeometry(size)
                     val baseR = g.stroke * 0.85f
                     val haloR = baseR * 2.6f
                     val halo = Brush.radialGradient(listOf(color.copy(alpha = 0.6f), Color.Transparent), center = Offset.Zero, radius = haloR)
-                    val ringStroke = Stroke(g.stroke * 0.28f)
+                    val bead = Brush.radialGradient(
+                        listOf(androidx.compose.ui.graphics.lerp(color, Color.White, 0.5f), color),
+                        center = Offset(-baseR * 0.3f, -baseR * 0.3f),
+                        radius = baseR * 1.4f,
+                    )
                     onDrawBehind {
                         val tAngle = Math.toRadians((START_ANGLE + SWEEP * target).toDouble())
                         val ms = markerScale
                         translate(g.center.x + (cos(tAngle) * g.radius).toFloat(), g.center.y + (sin(tAngle) * g.radius).toFloat()) {
-                            if (ms > 1.01f) {
-                                scale(ms, pivot = Offset.Zero) { drawCircle(halo, radius = haloR, center = Offset.Zero) }
+                            scale(maxOf(ms, 0.75f), pivot = Offset.Zero) {
+                                drawCircle(halo, radius = haloR, center = Offset.Zero, alpha = if (ms > 1.01f) 1f else 0.45f)
                             }
-                            drawCircle(MARKER_FILL, radius = baseR * ms, center = Offset.Zero)
-                            drawCircle(Color.White, radius = baseR * ms, center = Offset.Zero, style = ringStroke)
+                            drawCircle(bead, radius = baseR * ms, center = Offset.Zero)
+                            drawCircle(MARKER_FILL, radius = baseR * 0.38f * ms, center = Offset.Zero)
                         }
                     }
                 },

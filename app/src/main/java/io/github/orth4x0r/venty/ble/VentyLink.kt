@@ -12,6 +12,9 @@ interface VentyLink : AutoCloseable {
 
     /** Tries to revive a link that is up but silent, e.g. by re-subscribing to notifications. */
     suspend fun nudge() {}
+
+    /** Reads the link's signal strength in dBm, or null if the link can't. */
+    suspend fun readRssi(): Int? = null
 }
 
 class LinkLostException(message: String) : Exception(message)

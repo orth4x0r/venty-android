@@ -16,9 +16,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.orth4x0r.venty.R
 
 object VentyColors {
     val Background = Color(0xFF0F0D0C)
@@ -63,30 +67,61 @@ private fun colors() = darkColorScheme(
     error = VentyColors.Boost,
 )
 
+/**
+ * Two corner sizes and a pill, instead of a radius picked per component: [Small] for chips and
+ * buttons, [Large] for the few cards that group related things.
+ */
+object VentyShapes {
+    val Small = RoundedCornerShape(12.dp)
+    val Large = RoundedCornerShape(24.dp)
+    val Pill = RoundedCornerShape(50)
+}
+
+/**
+ * Barlow Condensed for figures: the dial, batteries, counts. A narrow DIN-like face reads as a
+ * gauge rather than a web page, and tabular digits keep rolling numbers from jumping sideways.
+ * Body text stays on the system face.
+ */
+val GaugeFont = FontFamily(
+    Font(R.font.barlow_condensed_medium, FontWeight.Medium),
+    Font(R.font.barlow_condensed_semibold, FontWeight.SemiBold),
+)
+
+private const val TABULAR = "tnum"
+
 private val base = Typography()
 private val typography = base.copy(
-    displayLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Light, fontSize = 84.sp, letterSpacing = (-3).sp),
-    headlineMedium = base.headlineMedium.copy(fontWeight = FontWeight.Medium),
+    displayLarge = TextStyle(fontFamily = GaugeFont, fontWeight = FontWeight.Medium, fontSize = 96.sp, lineHeight = 96.sp, letterSpacing = (-1).sp, fontFeatureSettings = TABULAR),
+    displaySmall = base.displaySmall.copy(fontFamily = GaugeFont, fontWeight = FontWeight.Medium, fontSize = 44.sp, fontFeatureSettings = TABULAR),
+    headlineMedium = base.headlineMedium.copy(fontFamily = GaugeFont, fontWeight = FontWeight.Medium),
+    headlineSmall = base.headlineSmall.copy(fontFamily = GaugeFont, fontWeight = FontWeight.SemiBold, fontFeatureSettings = TABULAR),
     titleLarge = base.titleLarge.copy(fontWeight = FontWeight.SemiBold),
     labelLarge = base.labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp),
 )
 
 /**
  * With [dynamicColor] on Android 12+, the heat accent comes from the wallpaper (Material You);
- * otherwise it's the stock orange. State colours (ready, boost, cool) stay fixed so they keep
- * their meaning.
+ * otherwise it's the chosen [accent], which can follow the device's body colour. State colours
+ * (ready, boost, cool) stay fixed so they keep their meaning. Accent changes glide over.
  */
 @Composable
-fun VentyTheme(dynamicColor: Boolean = false, content: @Composable () -> Unit) {
+fun VentyTheme(
+    dynamicColor: Boolean = false,
+    accent: Accent = Accent.Ember,
+    deviceColor: io.github.orth4x0r.venty.ble.DeviceColor? = null,
+    content: @Composable () -> Unit,
+) {
     val context = LocalContext.current
-    val (heat, ember) = remember(dynamicColor) {
+    val (heatTarget, emberTarget) = remember(dynamicColor, accent, deviceColor) {
         if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val scheme = dynamicDarkColorScheme(context)
             scheme.primary to lerp(scheme.primary, Color.White, 0.35f)
         } else {
-            VentyColors.DefaultHeat to VentyColors.DefaultEmber
+            accent.colors(deviceColor)
         }
     }
+    val heat by androidx.compose.animation.animateColorAsState(heatTarget, androidx.compose.animation.core.tween(900), label = "accentHeat")
+    val ember by androidx.compose.animation.animateColorAsState(emberTarget, androidx.compose.animation.core.tween(900), label = "accentEmber")
     VentyColors.Heat = heat
     VentyColors.Ember = ember
     MaterialTheme(colorScheme = colors(), typography = typography) {
