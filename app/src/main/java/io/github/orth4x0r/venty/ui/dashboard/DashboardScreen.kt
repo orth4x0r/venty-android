@@ -121,6 +121,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Battery0Bar
@@ -1439,6 +1440,22 @@ private fun BoostSelector(s: VentyStatus, enabled: Boolean, onMode: (HeaterMode)
         HeaterMode.Boost to "Boost",
         HeaterMode.SuperBoost to "Super",
     )
+    // One highlight that springs from segment to segment, rather than each segment fading its own
+    // background in and out, so a mode change reads as a single movement.
+    val selectedIndex = options.indexOfFirst { enabled && s.heaterMode == it.first }
+    val slot = remember { Animatable(selectedIndex.coerceAtLeast(0).toFloat()) }
+    LaunchedEffect(selectedIndex) {
+        if (selectedIndex >= 0) slot.animateTo(selectedIndex.toFloat(), spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow))
+    }
+    val highlightMode = options.getOrNull(selectedIndex)?.first
+    val highlight by animateColorAsState(
+        when (highlightMode) {
+            null -> Color.Transparent
+            HeaterMode.On -> VentyColors.Heat.copy(alpha = 0.18f)
+            else -> HeaterPhase.of(s.copy(heaterMode = highlightMode, setpointReached = false)).color.copy(alpha = 0.18f)
+        },
+        label = "segHighlight",
+    )
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
@@ -1446,7 +1463,18 @@ private fun BoostSelector(s: VentyStatus, enabled: Boolean, onMode: (HeaterMode)
             .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
             .clip(VentyShapes.Large)
             .background(VentyColors.Surface)
-            .padding(6.dp),
+            .padding(6.dp)
+            .drawBehind {
+                val gap = 6.dp.toPx()
+                val segment = (size.width - gap * (options.size - 1)) / options.size
+                // The container's 24 dp corner less its 6 dp inset, so the curves stay parallel.
+                drawRoundRect(
+                    highlight,
+                    topLeft = Offset(slot.value * (segment + gap), 0f),
+                    size = Size(segment, size.height),
+                    cornerRadius = CornerRadius(18.dp.toPx()),
+                )
+            },
     ) {
         options.forEach { (mode, label) ->
             val selected = enabled && s.heaterMode == mode
@@ -1456,17 +1484,20 @@ private fun BoostSelector(s: VentyStatus, enabled: Boolean, onMode: (HeaterMode)
             val accent = HeaterPhase.of(s.copy(heaterMode = mode, setpointReached = false)).let {
                 if (mode == HeaterMode.On) VentyColors.Heat else it.color
             }
-            val bg by animateColorAsState(if (selected) accent.copy(alpha = 0.18f) else Color.Transparent, label = "segBg")
             val fg by animateColorAsState(if (selected) accent else VentyColors.Muted, label = "segFg")
+            val interaction = remember { MutableInteractionSource() }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .weight(1f)
-                    // The container's 24 dp corner less its 6 dp inset, so the curves stay parallel.
+                    .pressScale(interaction, 0.94f)
                     .clip(RoundedCornerShape(18.dp))
-                    .background(bg)
                     .graphicsLayer { alpha = if (maxedOut) 0.4f else 1f }
-                    .clickable(enabled = enabled && !selected && !maxedOut) {
+                    .clickable(
+                        interactionSource = interaction,
+                        indication = LocalIndication.current,
+                        enabled = enabled && !selected && !maxedOut,
+                    ) {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onMode(mode)
                     }
