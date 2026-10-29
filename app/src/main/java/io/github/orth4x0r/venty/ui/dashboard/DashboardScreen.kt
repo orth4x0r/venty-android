@@ -164,6 +164,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -1566,6 +1567,17 @@ private fun HeaterButton(on: Boolean, accent: Color, onToggle: (Offset) -> Unit)
     val content by animateColorAsState(if (on) accent else Color(0xFF1A0D05), label = "heaterFg")
     val iconTurn by animateFloatAsState(if (on) 180f else 0f, spring(dampingRatio = 0.6f), label = "iconTurn")
     val shape = VentyShapes.Large
+    // While it's the call to start, a band of light crosses it every few seconds.
+    val sheen = if (!on) {
+        rememberInfiniteTransition(label = "heaterSheen").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(4200, easing = LinearEasing)),
+            label = "heaterSheenT",
+        )
+    } else {
+        null
+    }
     Row(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -1597,11 +1609,26 @@ private fun HeaterButton(on: Boolean, accent: Color, onToggle: (Offset) -> Unit)
             // While heating it's a solid slab of the phase colour, not an outline: still the
             // main thing to reach for, just quieter than the call to start.
             .background(accent.copy(alpha = 0.2f * (1f - fill)))
+            // All three stops come from the accent, so a wallpaper or body colour never ends in a
+            // stray orange.
             .background(
                 Brush.horizontalGradient(
-                    listOf(VentyColors.Ember.copy(alpha = fill), VentyColors.Heat.copy(alpha = fill), Color(0xFFFF5A2A).copy(alpha = fill)),
+                    listOf(
+                        VentyColors.Ember.copy(alpha = fill),
+                        VentyColors.Heat.copy(alpha = fill),
+                        lerp(VentyColors.Heat, Color.Black, 0.22f).copy(alpha = fill),
+                    ),
                 ),
             )
+            .drawWithContent {
+                drawContent()
+                val t = (sheen?.value ?: return@drawWithContent) / 0.35f
+                if (t < 1f && fill > 0.5f) {
+                    val band = size.width * 0.35f
+                    val x = -band + t * (size.width + band)
+                    drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.28f * fill), Color.Transparent), startX = x, endX = x + band))
+                }
+            }
             .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple()) {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 // A keyboard or accessibility click has no press point, so use the middle.
