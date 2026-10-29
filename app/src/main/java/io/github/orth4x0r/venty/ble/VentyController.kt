@@ -145,15 +145,6 @@ class VentyController(context: Context) {
     @Volatile private var pendingHeater: Pair<HeaterMode, Long>? = null
     @Volatile private var pendingBoost: Pair<Int, Long>? = null
     @Volatile private var pendingSuperBoost: Pair<Int, Long>? = null
-    @Volatile private var pendingBlePermanent: Pair<Boolean, Long>? = null
-
-    /**
-     * What the user last chose for "Keep Bluetooth on". A Venty sends short status packets without
-     * the settings2 byte, so its state can't be read back; this is what the switch shows then, and
-     * it's written again on every connect in case the device forgets it.
-     */
-    private val _blePermanentChoice = MutableStateFlow(prefs.getBoolean(KEY_BLE_PERMANENT, false))
-    val blePermanentChoice: StateFlow<Boolean> = _blePermanentChoice.asStateFlow()
     /** Device flag bit -> (value, time written), held until the device reports it. */
     private val pendingFlags = java.util.concurrent.ConcurrentHashMap<Int, Pair<Boolean, Long>>()
 
@@ -348,7 +339,6 @@ class VentyController(context: Context) {
         l.send(VentyProtocol.readUsage())
         l.send(VentyProtocol.readDeviceSettings())
         l.send(VentyProtocol.readIdentity())
-        if (_kind.value == DeviceKind.Venty && _blePermanentChoice.value) l.send(VentyProtocol.setBlePermanent(true))
 
         var tick = 0
         var announced = false
@@ -455,10 +445,6 @@ class VentyController(context: Context) {
         pendingSuperBoost?.let { (value, at) ->
             if (device.superBoostOffset == value || now - at > PENDING_HOLD_MS) pendingSuperBoost = null
             else shown = shown.copy(superBoostOffset = value)
-        }
-        pendingBlePermanent?.let { (value, at) ->
-            if (device.blePermanent == value || now - at > PENDING_HOLD_MS) pendingBlePermanent = null
-            else shown = shown.copy(blePermanent = value)
         }
         for ((bit, pending) in pendingFlags) {
             val (value, at) = pending
@@ -669,15 +655,6 @@ class VentyController(context: Context) {
         sendThenReread(VentyProtocol.setBoostTimeoutDisabled(disabled))
     }
 
-    /** Keeps the Venty's Bluetooth on while idle, if the firmware honours it (unverified on a Venty). */
-    fun setBlePermanent(on: Boolean) {
-        _blePermanentChoice.value = on
-        prefs.edit().putBoolean(KEY_BLE_PERMANENT, on).apply()
-        pendingBlePermanent = on to SystemClock.elapsedRealtime()
-        publish()
-        send(VentyProtocol.setBlePermanent(on))
-    }
-
     fun findMyDevice() = send(VentyProtocol.findMyDevice())
 
     /** Signal strength of the current link in dBm, or null when there's no link or the read failed. */
@@ -733,7 +710,6 @@ class VentyController(context: Context) {
         const val KEY_ADDRESS = "address"
         const val KEY_NAME = "name"
         const val KEY_KIND = "kind"
-        const val KEY_BLE_PERMANENT = "ble_permanent"
     }
 }
 

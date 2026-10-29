@@ -208,7 +208,6 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     val ramp by controller.ramp.collectAsStateWithLifecycle()
     val rampPlan by app.prefs.ramp.collectAsStateWithLifecycle()
     val rampProfiles by app.prefs.rampProfiles.collectAsStateWithLifecycle()
-    val blePermanentChoice by controller.blePermanentChoice.collectAsStateWithLifecycle()
 
     val name = when (connection) {
         is ConnectionState.Connected -> connection.name
@@ -385,8 +384,6 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             onVibration = controller::setVibration,
                             onBoostTimeoutDisabled = controller::setBoostTimeoutDisabled,
                             onFindMy = { openPage(Page.FindMy) },
-                            onBlePermanent = controller::setBlePermanent,
-                            blePermanentChoice = blePermanentChoice,
                             deviceAddress = controller.lastDeviceAddress,
                             onAppPrefs = app.prefs::setApp,
                             onBack = { closePage() },
