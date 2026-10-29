@@ -46,7 +46,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
@@ -56,7 +55,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.sin
 
 private const val RSSI_POLL_MS = 500L
@@ -77,8 +75,8 @@ internal fun closenessLabel(c: Float): String = when {
 
 /**
  * Makes the device buzz and flash, then plays hot-and-cold with the link's signal strength: a
- * sonar sweep, with the blip creeping in towards the centre and the whole radar warming from ice
- * blue to boost red as you close in. The phone ticks each time you get noticeably closer.
+ * ring that closes in on you as the signal grows, the whole screen warming from ice blue to boost
+ * red as you get near. The phone ticks each time you get noticeably closer.
  */
 @Composable
 fun FindMyScreen(
@@ -163,57 +161,47 @@ fun FindMyScreen(
     }
 }
 
+/**
+ * Signal strength says how far, never which way, so nothing here points anywhere: you're the dot
+ * in the middle, pings leave you, and the device is a glowing ring that closes in on you as the
+ * signal gets stronger, wobbling a little with each reading like a heat shimmer.
+ */
 @Composable
 private fun Radar(closeness: Float, tint: Color, hasSignal: Boolean, modifier: Modifier) {
     val t = rememberInfiniteTransition(label = "radar")
-    val sweep by t.animateFloat(0f, 360f, infiniteRepeatable(tween(2400, easing = LinearEasing), RepeatMode.Restart), label = "sweep")
-    // Sonar pings speed up as you get closer.
     val ping by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Restart), label = "ping")
-    // The blip sits on a fixed bearing, so it reads as "over there" rather than wandering.
-    val bearing = remember { (PI * 1.65).toFloat() }
+    val shimmer by t.animateFloat(0f, (2 * PI).toFloat(), infiniteRepeatable(tween(3000, easing = LinearEasing), RepeatMode.Restart), label = "shimmer")
 
     Canvas(modifier) {
         val center = Offset(size.width / 2, size.height / 2)
         val r = size.minDimension / 2 * 0.94f
         // Range rings.
         for (i in 1..4) {
-            drawCircle(tint.copy(alpha = 0.10f + 0.04f * i), radius = r * i / 4f, center = center, style = Stroke(1.dp.toPx()))
+            drawCircle(tint.copy(alpha = 0.06f + 0.03f * i), radius = r * i / 4f, center = center, style = Stroke(1.dp.toPx()))
         }
-        drawLine(tint.copy(alpha = 0.10f), Offset(center.x - r, center.y), Offset(center.x + r, center.y), 1.dp.toPx())
-        drawLine(tint.copy(alpha = 0.10f), Offset(center.x, center.y - r), Offset(center.x, center.y + r), 1.dp.toPx())
 
-        // Two expanding pings, half a cycle apart.
+        // Two pings leaving you, half a cycle apart.
         for (k in 0..1) {
             val p = (ping + k * 0.5f) % 1f
-            drawCircle(tint.copy(alpha = (1f - p) * 0.35f), radius = r * p, center = center, style = Stroke(2.dp.toPx() + 4.dp.toPx() * (1f - p)))
-        }
-
-        // The sweep: a fading wedge trailing the beam.
-        rotate(sweep, center) {
-            drawCircle(
-                Brush.sweepGradient(
-                    0f to Color.Transparent,
-                    0.75f to Color.Transparent,
-                    1f to tint.copy(alpha = 0.35f),
-                    center = center,
-                ),
-                radius = r,
-                center = center,
-            )
-            drawLine(tint.copy(alpha = 0.8f), center, Offset(center.x + r, center.y), 2.dp.toPx())
+            drawCircle(tint.copy(alpha = (1f - p) * 0.3f), radius = r * p, center = center, style = Stroke(2.dp.toPx() + 3.dp.toPx() * (1f - p)))
         }
 
         if (hasSignal) {
-            val dist = r * (1f - closeness) * 0.92f
-            val blip = Offset(center.x + cos(bearing) * dist, center.y + sin(bearing) * dist)
-            // Glows brightest just after the beam passes over it.
-            val beamAngle = (sweep / 360f * 2 * PI).toFloat()
-            val since = (((beamAngle - bearing) % (2 * PI).toFloat()) + (2 * PI).toFloat()) % (2 * PI).toFloat()
-            val glow = 1f - (since / (2 * PI).toFloat())
-            val dot = 7.dp.toPx() + 6.dp.toPx() * closeness
-            drawCircle(tint.copy(alpha = 0.25f * glow), radius = dot * 3f, center = blip)
-            drawCircle(tint.copy(alpha = 0.5f + 0.5f * glow), radius = dot, center = blip)
-            drawCircle(Color.White.copy(alpha = 0.8f * glow), radius = dot * 0.4f, center = blip)
+            // The device: a ring at its distance, thicker and hotter the closer it gets.
+            val ringR = (r * (1f - closeness) * 0.92f).coerceAtLeast(14.dp.toPx())
+            val width = 3.dp.toPx() + 9.dp.toPx() * closeness
+            val wobble = 1f + 0.015f * sin(shimmer * 3f)
+            drawCircle(
+                Brush.radialGradient(
+                    listOf(Color.Transparent, tint.copy(alpha = 0.35f), Color.Transparent),
+                    center = center,
+                    radius = ringR + width * 3f,
+                ),
+                radius = ringR + width * 3f,
+                center = center,
+            )
+            drawCircle(tint, radius = ringR * wobble, center = center, style = Stroke(width))
+            drawCircle(Color.White.copy(alpha = 0.5f * closeness), radius = ringR * wobble, center = center, style = Stroke(width * 0.3f))
         }
         // You, at the centre.
         drawCircle(VentyColors.OnSurface, radius = 5.dp.toPx(), center = center)

@@ -9,6 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.input.pointer.pointerInput
 import io.github.orth4x0r.venty.session.RampProfile
@@ -29,6 +30,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -86,9 +88,12 @@ import io.github.orth4x0r.venty.session.RampPlan
 import io.github.orth4x0r.venty.session.RampRun
 import io.github.orth4x0r.venty.ui.RollingNumber
 import io.github.orth4x0r.venty.ui.Temperature
+import io.github.orth4x0r.venty.ui.fadeEdges
+import io.github.orth4x0r.venty.ui.pressScale
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 import io.github.orth4x0r.venty.ui.theme.VentyShapes
 import kotlin.math.roundToInt
+import androidx.compose.foundation.interaction.MutableInteractionSource
 
 /**
  * Ramp session: set up a climb (start, step, interval, peak, hold), then watch it run on a
@@ -136,7 +141,8 @@ internal fun RampCard(
             }
         }
         Spacer(Modifier.height(12.dp))
-        RampChart(shown, run, fahrenheit, Modifier.fillMaxWidth().height(110.dp))
+        // Inset so the "now" marker, which starts on the left edge, isn't cut in half by the card.
+        RampChart(shown, run, fahrenheit, Modifier.fillMaxWidth().height(110.dp).padding(horizontal = 8.dp))
         Spacer(Modifier.height(12.dp))
         AnimatedContent(
             targetState = run,
@@ -284,16 +290,24 @@ private fun ProfileChips(
 ) {
     val haptics = LocalHapticFeedback.current
     val saved = profiles.any { it.plan == plan }
+    val rowState = rememberLazyListState()
     LazyRow(
+        state = rowState,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(vertical = 4.dp),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().fadeEdges(rowState),
     ) {
         items(profiles, key = { "${it.name}|${it.plan}" }) { profile ->
             val selected = profile.plan == plan
             val bg by animateColorAsState(if (selected) VentyColors.Heat.copy(alpha = 0.22f) else VentyColors.Surface, label = "profileBg")
             val border by animateColorAsState(if (selected) VentyColors.Heat else Color.White.copy(alpha = 0.08f), label = "profileBorder")
             val scale by animateFloatAsState(if (selected) 1.04f else 1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow), label = "profileScale")
+            var pressed by remember { mutableStateOf(false) }
+            val press by animateFloatAsState(
+                if (pressed) 0.93f else 1f,
+                spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                label = "profilePress",
+            )
             Text(
                 profile.name,
                 style = MaterialTheme.typography.labelLarge,
@@ -301,14 +315,19 @@ private fun ProfileChips(
                 modifier = Modifier
                     .animateItem()
                     .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
+                        scaleX = scale * press
+                        scaleY = scale * press
                     }
                     .clip(VentyShapes.Small)
                     .background(bg)
                     .border(1.dp, border, VentyShapes.Small)
                     .pointerInput(profile) {
                         detectTapGestures(
+                            onPress = {
+                                pressed = true
+                                tryAwaitRelease()
+                                pressed = false
+                            },
                             onTap = {
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onApply(profile)
@@ -324,13 +343,15 @@ private fun ProfileChips(
         }
         if (!saved && profiles.size < 8) {
             item(key = "save") {
+                val interaction = remember { MutableInteractionSource() }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .animateItem()
+                        .pressScale(interaction, 0.93f)
                         .clip(VentyShapes.Small)
                         .border(1.dp, VentyColors.Heat.copy(alpha = 0.4f), VentyShapes.Small)
-                        .clickable {
+                        .clickable(interactionSource = interaction, indication = LocalIndication.current) {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             onSave()
                         }
@@ -373,15 +394,17 @@ private fun RampButton(
     val heat = VentyColors.Heat
     val ember = VentyColors.Ember
     val shape = VentyShapes.Pill
+    val interaction = remember { MutableInteractionSource() }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
         modifier = modifier
+            .pressScale(interaction, 0.96f)
             .clip(shape)
             .background(
                 if (filled) Brush.horizontalGradient(listOf(heat, ember)) else SolidColor(VentyColors.Track),
             )
-            .clickable {
+            .clickable(interactionSource = interaction, indication = LocalIndication.current) {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
             }
@@ -426,6 +449,14 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
             rise.animateTo(1f, tween(1300, easing = FastOutSlowInEasing))
         }
     }
+    // The staircase draws itself in from the left whenever the plan changes, so picking a profile
+    // or adjusting one visibly redraws the curve rather than snapping to it. A change that lands
+    // mid-draw carries on from there, so holding a +/- button doesn't keep restarting it.
+    val reveal = remember { Animatable(0f) }
+    LaunchedEffect(plan) {
+        if (reveal.value >= 1f) reveal.snapTo(0f)
+        reveal.animateTo(1f, tween(750, easing = FastOutSlowInEasing))
+    }
     val lowC = plan.startC - maxOf(2, (plan.peakC - plan.startC) / 4)
     val highC = plan.peakC + 1
     fun yFrac(c: Int) = 1f - (c - lowC).toFloat() / (highC - lowC).coerceAtLeast(1)
@@ -446,11 +477,13 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
             }
             line.lineTo(w, h * yFrac(plan.peakC))
             val stroke = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-            drawPath(line, track, style = stroke)
             // Where the climb ends and the hold begins.
             val holdX = w * plan.rampMs / total
-            if (plan.holdMs > 0) {
-                drawLine(track, Offset(holdX, 0f), Offset(holdX, h), strokeWidth = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+            clipRect(right = w * reveal.value) {
+                drawPath(line, track, style = stroke)
+                if (plan.holdMs > 0) {
+                    drawLine(track, Offset(holdX, 0f), Offset(holdX, h), strokeWidth = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+                }
             }
             if (progress != null) {
                 val nowX = w * progress

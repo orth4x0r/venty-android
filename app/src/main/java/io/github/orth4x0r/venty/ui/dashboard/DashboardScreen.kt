@@ -26,6 +26,7 @@ import io.github.orth4x0r.venty.session.estimateBatteryForecast
 import io.github.orth4x0r.venty.ui.HeatAura
 import io.github.orth4x0r.venty.ui.HeatHaptics
 import io.github.orth4x0r.venty.ui.LavaLayer
+import io.github.orth4x0r.venty.ui.fadeEdges
 import io.github.orth4x0r.venty.ui.findmy.FindMyScreen
 import io.github.orth4x0r.venty.ui.heatProgress
 import io.github.orth4x0r.venty.ui.wrapped.WrappedScreen
@@ -46,6 +47,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.geometry.CornerRadius
@@ -79,6 +81,7 @@ import kotlin.math.abs
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -119,6 +122,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Battery0Bar
@@ -144,6 +148,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -158,13 +163,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.orth4x0r.venty.ble.ConnectionState
 import io.github.orth4x0r.venty.ble.DeviceInfo
@@ -176,6 +185,7 @@ import io.github.orth4x0r.venty.ble.VentyStatus
 import io.github.orth4x0r.venty.ui.Temperature
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 import io.github.orth4x0r.venty.ui.theme.VentyShapes
+import io.github.orth4x0r.venty.ui.theme.GaugeFont
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -405,6 +415,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             history = history,
                             fahrenheit = status?.fahrenheit == true,
                             onBack = { closePage() },
+                            range = kind.targetRange,
                         )
                         Page.Main -> Column(
                             Modifier
@@ -739,18 +750,23 @@ private fun Dashboard(
         onDrag = onDialDrag,
         range = kind.targetRange,
     ) {
-        Text(
-            when {
-                dragDisplay != null -> "Set to"
-                current != null -> "Now"
-                !heating -> "Target"
-                // The pill already says Ready.
-                s.setpointReached -> "Holding"
-                else -> "Heating to"
-            },
-            style = MaterialTheme.typography.labelLarge,
-            color = VentyColors.Muted,
-        )
+        // A puff ring is taller than the auto-off line it stands in for, so while it shows, the
+        // label above the number goes too; otherwise the column outgrows the dial into the arc.
+        val puffing = live?.puffStartMs != null
+        AnimatedVisibility(visible = !puffing, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+            Text(
+                when {
+                    dragDisplay != null -> "Set to"
+                    current != null -> "Now"
+                    !heating -> "Target"
+                    // The pill already says Ready.
+                    s.setpointReached -> "Holding"
+                    else -> "Heating to"
+                },
+                style = MaterialTheme.typography.labelLarge,
+                color = VentyColors.Muted,
+            )
+        }
         BigTemperature(
             value = dragDisplay ?: Temperature.toDisplay(current ?: s.effectiveTargetTenths, f),
             unit = unit,
@@ -771,7 +787,7 @@ private fun Dashboard(
         }
         StatusPill(phase, s)
         PuffTimer(startMs = live?.puffStartMs, targetMs = puffTargetMs, buzz = puffBuzz)
-        if (s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
+        if (!puffing && s.heaterMode.isHeating && s.setpointReached && s.autoOffSeconds > 0) {
             Spacer(Modifier.height(10.dp))
             Text(
                 "Auto-off in ${s.autoOffSeconds / 60}:${"%02d".format(s.autoOffSeconds % 60)}",
@@ -890,11 +906,13 @@ private fun PresetsRow(
     // scrolling one out of view and back doesn't replay it.
     val popped = remember { HashSet<Int>().apply { keyed.forEach { add(it.first) } } }
     val exists = presets.any { it.tenthsC == s.targetTenths }
+    val rowState = rememberLazyListState()
     LazyRow(
+        state = rowState,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         // Room above and below for the selected chip's glow, which the list would clip.
         contentPadding = PaddingValues(vertical = 10.dp),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().fadeEdges(rowState),
     ) {
         items(keyed, key = { it.first }) { (id, p) ->
             val selected = p.tenthsC == s.targetTenths
@@ -1060,7 +1078,7 @@ private fun BatteryCard(s: VentyStatus, samples: List<BatterySample>, history: L
                     Text(
                         when {
                             s.charging -> "Charging"
-                            estimate != null -> "About ${estimate.toInt()} h ${((estimate % 1) * 60).toInt()} m left at this pace"
+                            estimate != null -> "About ${hoursAndMinutes((estimate * 60).toInt())} left at this pace"
                             else -> "Learning your drain rate…"
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -1107,7 +1125,7 @@ private fun SessionForecast(f: BatteryForecast, color: Color) {
             }
             f.heatingMinutesLeft?.let { m ->
                 Text(
-                    "About ${if (m >= 90) "${m / 60} h ${m % 60} m" else "$m min"} of heating left",
+                    "About ${hoursAndMinutes(m)} of heating left",
                     style = style,
                     color = VentyColors.Muted,
                 )
@@ -1312,14 +1330,47 @@ private fun StatusPill(phase: HeaterPhase, s: VentyStatus) {
         HeaterPhase.SuperBoost -> " +${s.boostOffset + s.superBoostOffset}°"
         else -> ""
     }
+    // While ready, the dot sends out a slow ping and a band of light crosses the pill now and
+    // then: alive, but quiet enough to sit through a whole session.
+    val shine = if (phase == HeaterPhase.Ready) {
+        rememberInfiniteTransition(label = "readyShine").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(3600, easing = LinearEasing)),
+            label = "readyShineT",
+        )
+    } else {
+        null
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(VentyShapes.Pill)
             .background(color.copy(alpha = 0.14f))
+            .drawWithContent {
+                drawContent()
+                // The sweep takes the first 40 % of each cycle and rests for the remainder.
+                val t = (shine?.value ?: return@drawWithContent) / 0.4f
+                if (t < 1f) {
+                    val band = size.width * 0.45f
+                    val x = -band + t * (size.width + band)
+                    drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.16f), Color.Transparent), startX = x, endX = x + band))
+                }
+            }
             .padding(horizontal = 14.dp, vertical = 6.dp),
     ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Box(
+            Modifier
+                .size(8.dp)
+                .drawBehind {
+                    val t = shine?.value ?: return@drawBehind
+                    // Two pings per cycle, each a ring that grows and fades.
+                    val p = (t * 2f) % 1f
+                    drawCircle(color.copy(alpha = 0.5f * (1f - p)), radius = size.minDimension / 2f * (1f + 1.6f * p))
+                }
+                .clip(CircleShape)
+                .background(color),
+        )
         Spacer(Modifier.width(8.dp))
         // The new label rises in as the old one drops away, and the pill eases to its width.
         AnimatedContent(
@@ -1428,6 +1479,22 @@ private fun BoostSelector(s: VentyStatus, enabled: Boolean, onMode: (HeaterMode)
         HeaterMode.Boost to "Boost",
         HeaterMode.SuperBoost to "Super",
     )
+    // One highlight that springs from segment to segment, rather than each segment fading its own
+    // background in and out, so a mode change reads as a single movement.
+    val selectedIndex = options.indexOfFirst { enabled && s.heaterMode == it.first }
+    val slot = remember { Animatable(selectedIndex.coerceAtLeast(0).toFloat()) }
+    LaunchedEffect(selectedIndex) {
+        if (selectedIndex >= 0) slot.animateTo(selectedIndex.toFloat(), spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow))
+    }
+    val highlightMode = options.getOrNull(selectedIndex)?.first
+    val highlight by animateColorAsState(
+        when (highlightMode) {
+            null -> Color.Transparent
+            HeaterMode.On -> VentyColors.Heat.copy(alpha = 0.18f)
+            else -> HeaterPhase.of(s.copy(heaterMode = highlightMode, setpointReached = false)).color.copy(alpha = 0.18f)
+        },
+        label = "segHighlight",
+    )
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
@@ -1435,7 +1502,18 @@ private fun BoostSelector(s: VentyStatus, enabled: Boolean, onMode: (HeaterMode)
             .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
             .clip(VentyShapes.Large)
             .background(VentyColors.Surface)
-            .padding(6.dp),
+            .padding(6.dp)
+            .drawBehind {
+                val gap = 6.dp.toPx()
+                val segment = (size.width - gap * (options.size - 1)) / options.size
+                // The container's 24 dp corner less its 6 dp inset, so the curves stay parallel.
+                drawRoundRect(
+                    highlight,
+                    topLeft = Offset(slot.value * (segment + gap), 0f),
+                    size = Size(segment, size.height),
+                    cornerRadius = CornerRadius(18.dp.toPx()),
+                )
+            },
     ) {
         options.forEach { (mode, label) ->
             val selected = enabled && s.heaterMode == mode
@@ -1445,17 +1523,20 @@ private fun BoostSelector(s: VentyStatus, enabled: Boolean, onMode: (HeaterMode)
             val accent = HeaterPhase.of(s.copy(heaterMode = mode, setpointReached = false)).let {
                 if (mode == HeaterMode.On) VentyColors.Heat else it.color
             }
-            val bg by animateColorAsState(if (selected) accent.copy(alpha = 0.18f) else Color.Transparent, label = "segBg")
             val fg by animateColorAsState(if (selected) accent else VentyColors.Muted, label = "segFg")
+            val interaction = remember { MutableInteractionSource() }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .weight(1f)
-                    // The container's 24 dp corner less its 6 dp inset, so the curves stay parallel.
+                    .pressScale(interaction, 0.94f)
                     .clip(RoundedCornerShape(18.dp))
-                    .background(bg)
                     .graphicsLayer { alpha = if (maxedOut) 0.4f else 1f }
-                    .clickable(enabled = enabled && !selected && !maxedOut) {
+                    .clickable(
+                        interactionSource = interaction,
+                        indication = LocalIndication.current,
+                        enabled = enabled && !selected && !maxedOut,
+                    ) {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onMode(mode)
                     }
@@ -1487,6 +1568,17 @@ private fun HeaterButton(on: Boolean, accent: Color, onToggle: (Offset) -> Unit)
     val content by animateColorAsState(if (on) accent else Color(0xFF1A0D05), label = "heaterFg")
     val iconTurn by animateFloatAsState(if (on) 180f else 0f, spring(dampingRatio = 0.6f), label = "iconTurn")
     val shape = VentyShapes.Large
+    // While it's the call to start, a band of light crosses it every few seconds.
+    val sheen = if (!on) {
+        rememberInfiniteTransition(label = "heaterSheen").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(4200, easing = LinearEasing)),
+            label = "heaterSheenT",
+        )
+    } else {
+        null
+    }
     Row(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -1518,11 +1610,26 @@ private fun HeaterButton(on: Boolean, accent: Color, onToggle: (Offset) -> Unit)
             // While heating it's a solid slab of the phase colour, not an outline: still the
             // main thing to reach for, just quieter than the call to start.
             .background(accent.copy(alpha = 0.2f * (1f - fill)))
+            // All three stops come from the accent, so a wallpaper or body colour never ends in a
+            // stray orange.
             .background(
                 Brush.horizontalGradient(
-                    listOf(VentyColors.Ember.copy(alpha = fill), VentyColors.Heat.copy(alpha = fill), Color(0xFFFF5A2A).copy(alpha = fill)),
+                    listOf(
+                        VentyColors.Ember.copy(alpha = fill),
+                        VentyColors.Heat.copy(alpha = fill),
+                        lerp(VentyColors.Heat, Color.Black, 0.22f).copy(alpha = fill),
+                    ),
                 ),
             )
+            .drawWithContent {
+                drawContent()
+                val t = (sheen?.value ?: return@drawWithContent) / 0.35f
+                if (t < 1f && fill > 0.5f) {
+                    val band = size.width * 0.35f
+                    val x = -band + t * (size.width + band)
+                    drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.28f * fill), Color.Transparent), startX = x, endX = x + band))
+                }
+            }
             .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple()) {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 // A keyboard or accessibility click has no press point, so use the middle.
@@ -1623,13 +1730,46 @@ private fun TopBar(
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text(name, style = MaterialTheme.typography.titleLarge)
-            Text(
-                if (demo) "Demo mode, no device" else if (status != null) "Connected" else "Connecting",
-                style = MaterialTheme.typography.bodySmall,
-                color = VentyColors.Muted,
+        // The advertised name ("S&B VY___JP4") wraps next to the actions, so the title is the model
+        // and the unit's own tag sits under it. A dot says connected (breathing while it connects)
+        // instead of a word, which left no room for the tag beside the battery and three icons.
+        val tag = name.removePrefix("S&B").trim().takeIf { it.isNotEmpty() && it != kind.displayName }
+        val connected = status != null
+        val dotAlpha = if (connected || demo) {
+            1f
+        } else {
+            val breathe by rememberInfiniteTransition(label = "connectDot").animateFloat(
+                initialValue = 0.3f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+                label = "connectDotA",
             )
+            breathe
+        }
+        val dotColor by animateColorAsState(if (connected && !demo) VentyColors.Ready else VentyColors.Muted, label = "connectDotC")
+        Column(Modifier.weight(1f)) {
+            Text(kind.displayName, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(6.dp).graphicsLayer { alpha = dotAlpha }.clip(CircleShape).background(dotColor))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    when {
+                        demo -> "Demo mode"
+                        tag != null -> tag
+                        connected -> "Connected"
+                        else -> "Connecting…"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VentyColors.Muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics {
+                        // The dot carries the state visually; say it out loud too.
+                        val state = if (demo) "Demo mode, no device" else if (connected) "Connected" else "Connecting"
+                        contentDescription = if (tag != null && !demo) "$state, $tag" else state
+                    },
+                )
+            }
         }
         if (status != null && kind.hasBattery) BatteryBadge(status.battery, status.charging)
         IconButton(onClick = onHistory) { Icon(Icons.Rounded.BarChart, "History") }
@@ -1670,7 +1810,10 @@ private fun BatteryBadge(percent: Int, charging: Boolean) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp).padding(end = 2.dp))
-        Text("$percent%", style = MaterialTheme.typography.labelLarge, color = tint)
+        // A figure, so the gauge face, and it ticks down like the battery card's number.
+        val figure = MaterialTheme.typography.labelLarge.copy(fontFamily = GaugeFont, fontSize = 16.sp)
+        RollingNumber(percent, figure, tint)
+        Text("%", style = figure, color = tint)
     }
 }
 
@@ -1728,3 +1871,7 @@ internal fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit
             .padding(20.dp),
     ) { content() }
 }
+
+/** "45 min" under an hour and a half, "2 h 10 min" from there, so short spans don't read "0 h 53 m". */
+private fun hoursAndMinutes(minutes: Int): String =
+    if (minutes < 90) "$minutes min" else "${minutes / 60} h ${minutes % 60} min"
