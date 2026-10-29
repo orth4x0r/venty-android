@@ -81,6 +81,7 @@ import kotlin.math.abs
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -161,6 +162,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -1324,14 +1326,47 @@ private fun StatusPill(phase: HeaterPhase, s: VentyStatus) {
         HeaterPhase.SuperBoost -> " +${s.boostOffset + s.superBoostOffset}°"
         else -> ""
     }
+    // While ready, the dot sends out a slow ping and a band of light crosses the pill now and
+    // then: alive, but quiet enough to sit through a whole session.
+    val shine = if (phase == HeaterPhase.Ready) {
+        rememberInfiniteTransition(label = "readyShine").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(3600, easing = LinearEasing)),
+            label = "readyShineT",
+        )
+    } else {
+        null
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(VentyShapes.Pill)
             .background(color.copy(alpha = 0.14f))
+            .drawWithContent {
+                drawContent()
+                // The sweep takes the first 40 % of each cycle and rests for the remainder.
+                val t = (shine?.value ?: return@drawWithContent) / 0.4f
+                if (t < 1f) {
+                    val band = size.width * 0.45f
+                    val x = -band + t * (size.width + band)
+                    drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.16f), Color.Transparent), startX = x, endX = x + band))
+                }
+            }
             .padding(horizontal = 14.dp, vertical = 6.dp),
     ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Box(
+            Modifier
+                .size(8.dp)
+                .drawBehind {
+                    val t = shine?.value ?: return@drawBehind
+                    // Two pings per cycle, each a ring that grows and fades.
+                    val p = (t * 2f) % 1f
+                    drawCircle(color.copy(alpha = 0.5f * (1f - p)), radius = size.minDimension / 2f * (1f + 1.6f * p))
+                }
+                .clip(CircleShape)
+                .background(color),
+        )
         Spacer(Modifier.width(8.dp))
         // The new label rises in as the old one drops away, and the pill eases to its width.
         AnimatedContent(
