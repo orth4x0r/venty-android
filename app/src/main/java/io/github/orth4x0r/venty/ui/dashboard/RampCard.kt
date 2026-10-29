@@ -141,7 +141,8 @@ internal fun RampCard(
             }
         }
         Spacer(Modifier.height(12.dp))
-        RampChart(shown, run, fahrenheit, Modifier.fillMaxWidth().height(110.dp))
+        // Inset so the "now" marker, which starts on the left edge, isn't cut in half by the card.
+        RampChart(shown, run, fahrenheit, Modifier.fillMaxWidth().height(110.dp).padding(horizontal = 8.dp))
         Spacer(Modifier.height(12.dp))
         AnimatedContent(
             targetState = run,
