@@ -68,4 +68,47 @@ class RampPlanTest {
         assertEquals(RampPlan.MIN_STEP_EVERY_MS, p.stepEveryMs)
         assertEquals(0L, p.holdMs)
     }
+
+    @Test
+    fun `span spreads 1 degree steps across the bowl and lasts exactly as long as asked`() {
+        val p = RampPlan.span(startC = 180, finishC = 200, totalMs = 12 * minute, plateauMs = 2 * minute)
+        assertEquals(1, p.stepC)
+        assertEquals(20, p.steps)
+        assertEquals(30_000L, p.stepEveryMs)
+        assertEquals(10 * minute, p.rampMs)
+        assertEquals(12 * minute, p.totalMs)
+        assertEquals(200, p.targetAt(10 * minute))
+    }
+
+    @Test
+    fun `span without a plateau climbs for the whole session`() {
+        val p = RampPlan.span(startC = 175, finishC = 205, totalMs = 15 * minute)
+        assertEquals(15 * minute, p.totalMs)
+        assertEquals(RampPhase.Ramping, p.phaseAt(15 * minute - 30_000L - 1))
+        assertEquals(205, p.targetAt(p.rampMs))
+    }
+
+    @Test
+    fun `span rounding goes into the hold so the total stays put`() {
+        val p = RampPlan.span(startC = 180, finishC = 187, totalMs = 10 * minute)
+        assertEquals(7, p.steps)
+        assertEquals(10 * minute, p.totalMs)
+        assertEquals(true, p.holdMs < 7)
+    }
+
+    @Test
+    fun `span takes bigger steps when 1 degree steps would come faster than every 30 s`() {
+        val p = RampPlan.span(startC = 170, finishC = 210, totalMs = 5 * minute)
+        assertEquals(4, p.stepC)
+        assertEquals(10, p.steps)
+        assertEquals(5 * minute, p.totalMs)
+    }
+
+    @Test
+    fun `span with start at the finish just holds`() {
+        val p = RampPlan.span(startC = 195, finishC = 195, totalMs = 8 * minute)
+        assertEquals(0, p.steps)
+        assertEquals(8 * minute, p.totalMs)
+        assertEquals(195, p.targetAt(0))
+    }
 }

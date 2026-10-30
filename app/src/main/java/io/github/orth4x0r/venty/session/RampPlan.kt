@@ -53,8 +53,39 @@ data class RampPlan(
         const val MIN_STEP_C = 1
         const val MAX_STEP_C = 10
         const val MIN_STEP_EVERY_MS = 30_000L
-        const val MAX_STEP_EVERY_MS = 5 * 60_000L
+        const val MAX_STEP_EVERY_MS = 20 * 60_000L
         const val MAX_HOLD_MS = 15 * 60_000L
+
+        const val MIN_SESSION_MS = 2 * 60_000L
+        const val MAX_SESSION_MS = 30 * 60_000L
+
+        /**
+         * The simple way to set up a ramp: go from [startC] to [finishC] so the whole bowl takes
+         * [totalMs], with the last [plateauMs] of it held at the finish. The climb uses the smallest
+         * step (1 °C if it can) that keeps steps at least [MIN_STEP_EVERY_MS] apart, and any
+         * rounding goes into the hold, so the bowl lasts exactly [totalMs]. A climb too steep for
+         * 10 °C every 30 s runs as fast as it can and the bowl ends up a little longer.
+         */
+        fun span(startC: Int, finishC: Int, totalMs: Long, plateauMs: Long = 0L): RampPlan {
+            val total = totalMs.coerceIn(MIN_SESSION_MS, MAX_SESSION_MS)
+            val hold = plateauMs.coerceIn(0L, minOf(MAX_HOLD_MS, total))
+            val climbC = finishC - startC
+            if (climbC <= 0) return RampPlan(startC = startC, peakC = startC, holdMs = total.coerceAtMost(MAX_HOLD_MS))
+            val climbMs = total - hold
+            var step = MIN_STEP_C
+            while (step < MAX_STEP_C && climbMs / ceilDiv(climbC, step) < MIN_STEP_EVERY_MS) step++
+            val steps = ceilDiv(climbC, step)
+            val every = (climbMs / steps).coerceIn(MIN_STEP_EVERY_MS, MAX_STEP_EVERY_MS)
+            return RampPlan(
+                startC = startC,
+                stepC = step,
+                stepEveryMs = every,
+                peakC = finishC,
+                holdMs = (total - steps * every).coerceIn(hold, MAX_HOLD_MS),
+            )
+        }
+
+        private fun ceilDiv(a: Int, b: Int) = (a + b - 1) / b
     }
 }
 
