@@ -530,8 +530,8 @@ class VentyController(context: Context) {
         }
     }
 
-    fun setBoostOffset(degreesC: Int) {
-        val value = degreesC.coerceIn(VentyProtocol.MIN_OFFSET, VentyProtocol.MAX_OFFSET)
+    fun setBoostOffset(degrees: Int) {
+        val value = degrees.coerceIn(VentyProtocol.MIN_OFFSET, VentyProtocol.MAX_OFFSET)
         pendingBoost = value to SystemClock.elapsedRealtime()
         publish()
         boostWriteJob?.cancel()
@@ -542,8 +542,8 @@ class VentyController(context: Context) {
         }
     }
 
-    fun setSuperBoostOffset(degreesC: Int) {
-        val value = degreesC.coerceIn(VentyProtocol.MIN_OFFSET, VentyProtocol.MAX_OFFSET)
+    fun setSuperBoostOffset(degrees: Int) {
+        val value = degrees.coerceIn(VentyProtocol.MIN_OFFSET, VentyProtocol.MAX_OFFSET)
         pendingSuperBoost = value to SystemClock.elapsedRealtime()
         publish()
         superBoostWriteJob?.cancel()
