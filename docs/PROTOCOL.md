@@ -85,8 +85,8 @@ Request packets: the app sends 20-byte zero-filled packets for most commands and
 | 1 | mask / status | |
 | 2–3 | current temperature | u16 LE, ×10 °C. `0x8000` = not available. Reportedly **always** `0x8000` on the Venty (see note below) |
 | 4–5 | target temperature | u16 LE, ×10 °C. The base setpoint, without boost |
-| 6 | boost offset | °C added in boost mode |
-| 7 | superboost offset | °C added on top of boost in superboost mode |
+| 6 | boost offset | degrees added in boost mode, **in the device's display unit** (°F when the Fahrenheit flag is set) |
+| 7 | superboost offset | degrees added on top of boost in superboost mode, same unit as byte 6 |
 | 8 | battery | 0–100 % |
 | 9–10 | auto-shutoff countdown | seconds. **The vendor app computes `b9 + b10`, not a u16**; its progress bar treats 120 s as 100 % |
 | 11 | heater mode | 0 off, 1 on, 2 boost, 3 superboost |

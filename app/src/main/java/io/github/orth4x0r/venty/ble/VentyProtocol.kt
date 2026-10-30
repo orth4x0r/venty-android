@@ -1,6 +1,7 @@
 package io.github.orth4x0r.venty.ble
 
 import java.util.UUID
+import kotlin.math.roundToInt
 
 /**
  * Packet encoding and decoding for the Venty's "qvap" protocol. See docs/PROTOCOL.md.
@@ -64,14 +65,14 @@ object VentyProtocol {
         it.putU16(4, tenthsC.coerceIn(MIN_TARGET, max))
     }
 
-    fun setBoostOffset(degreesC: Int): ByteArray = packet(CMD_STATUS).also {
+    fun setBoostOffset(degrees: Int): ByteArray = packet(CMD_STATUS).also {
         it[1] = MASK_BOOST.toByte()
-        it[6] = degreesC.coerceIn(MIN_OFFSET, MAX_OFFSET).toByte()
+        it[6] = degrees.coerceIn(MIN_OFFSET, MAX_OFFSET).toByte()
     }
 
-    fun setSuperBoostOffset(degreesC: Int): ByteArray = packet(CMD_STATUS).also {
+    fun setSuperBoostOffset(degrees: Int): ByteArray = packet(CMD_STATUS).also {
         it[1] = MASK_SUPERBOOST.toByte()
-        it[7] = degreesC.coerceIn(MIN_OFFSET, MAX_OFFSET).toByte()
+        it[7] = degrees.coerceIn(MIN_OFFSET, MAX_OFFSET).toByte()
     }
 
     fun setHeaterMode(mode: HeaterMode): ByteArray = packet(CMD_STATUS).also {
@@ -255,11 +256,15 @@ data class VentyStatus(
         get() = targetFor(heaterMode)
 
     fun targetFor(mode: HeaterMode): Int = when (mode) {
-        HeaterMode.Boost -> minOf(VentyProtocol.MAX_TARGET, targetTenths + boostOffset * 10)
-        HeaterMode.SuperBoost -> minOf(VentyProtocol.MAX_TARGET, targetTenths + (boostOffset + superBoostOffset) * 10)
+        HeaterMode.Boost -> minOf(VentyProtocol.MAX_TARGET, targetTenths + offsetTenths(boostOffset))
+        HeaterMode.SuperBoost -> minOf(VentyProtocol.MAX_TARGET, targetTenths + offsetTenths(boostOffset + superBoostOffset))
         // Unboosted, the setpoint stands as is: a Volcano's goes past the Venty's 210 °C.
         else -> targetTenths
     }
+
+    /** The offsets count in the device's display unit: a Venty set to °F reports +30 for +30 °F. */
+    private fun offsetTenths(degrees: Int): Int =
+        if (fahrenheit) (degrees * 50 / 9.0).roundToInt() else degrees * 10
 }
 
 /** Display and feel settings from cmd `0x06`. */
