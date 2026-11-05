@@ -29,9 +29,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "VentyController"
 private const val POLL_INTERVAL_MS = 500L
+/**
+ * Poll interval while nothing is happening (app in the background, heater off). Every poll wakes
+ * the Venty's radio and gets a reply, so a slower poll is gentler on its battery. Well under
+ * [NUDGE_AFTER_MS], so a quiet link isn't mistaken for a silent one.
+ */
+private const val LOW_POWER_POLL_INTERVAL_MS = 2_000L
 private const val USAGE_EVERY_TICKS = 31
 // Generous on purpose: every reconnect makes the Venty buzz, and the official app never drops a
 // link on its own. Android reports a real disconnect itself (supervision timeout), so this is only
@@ -161,6 +168,37 @@ class VentyController(context: Context) {
 
     val lastDeviceName: String? get() = prefs.getString(KEY_NAME, null)
 
+    /** Poll slowly; set by the app while it's in the background and the heater is off. */
+    private val lowPower = MutableStateFlow(false)
+
+    fun setLowPower(on: Boolean) {
+        if (lowPower.value != on) Log.i(TAG, "low power poll: $on")
+        lowPower.value = on
+    }
+
+    /**
+     * True after [idleDisconnect] let go of the device, until the device goes out of range or
+     * asleep, or the user connects again. While set, "connect when it turns on" ignores the
+     * device: it starts advertising again the moment we let go, and reconnecting then would
+     * undo the point of letting go. Kept in prefs so it survives the process being killed.
+     */
+    val idleDisconnected: Boolean get() = prefs.getBoolean(KEY_IDLE_DISCONNECTED, false)
+
+    private fun setIdleDisconnected(on: Boolean) {
+        if (idleDisconnected != on) prefs.edit().putBoolean(KEY_IDLE_DISCONNECTED, on).apply()
+    }
+
+    /**
+     * Lets go of the device after it has sat idle, so it can go to sleep instead of staying awake
+     * for the phone. The device is kept; opening the app or using the tile connects again.
+     */
+    fun idleDisconnect(minutes: Int) {
+        if (_connection.value is ConnectionState.Idle) return
+        logLink("Idle for $minutes min, let go to save the ${_kind.value.displayName}'s battery")
+        setIdleDisconnected(true)
+        disconnect()
+    }
+
     // ---- Scanning -------------------------------------------------------------------------
 
     fun startScan() {
@@ -221,6 +259,7 @@ class VentyController(context: Context) {
     // ---- Sessions -------------------------------------------------------------------------
 
     fun connect(device: FoundDevice) {
+        setIdleDisconnected(false)
         prefs.edit()
             .putString(KEY_ADDRESS, device.address)
             .putString(KEY_NAME, device.name)
@@ -249,10 +288,24 @@ class VentyController(context: Context) {
         when (_connection.value) {
             is ConnectionState.Connected, is ConnectionState.Connecting -> return
             else -> {
+                if (idleDisconnected) {
+                    // We just let go and it's advertising again; wait until it has been away.
+                    Log.i(TAG, "device appeared, but it was let go while idle; ignoring")
+                    return
+                }
                 logLink("Device turned on, connecting")
                 connectToLast()
             }
         }
+    }
+
+    /**
+     * The saved device stopped advertising: it went to sleep, was switched off or left range.
+     * From now on, the next time it turns up is a real "it turned on", so connect again then.
+     */
+    fun onDeviceDisappeared() {
+        if (idleDisconnected) logLink("Device went to sleep")
+        setIdleDisconnected(false)
     }
 
     /**
@@ -379,7 +432,12 @@ class VentyController(context: Context) {
         var announced = false
         var lastNudgeAt = 0L
         while (true) {
-            delay(POLL_INTERVAL_MS)
+            if (lowPower.value && !demo) {
+                // Leave the slow wait the moment the app comes back or the heater goes on.
+                withTimeoutOrNull(LOW_POWER_POLL_INTERVAL_MS) { lowPower.first { !it } }
+            } else {
+                delay(POLL_INTERVAL_MS)
+            }
             if (heldForPairing.value && !demo) throw LinkLostException("Paused for auto-connect setup")
             if (!announced && deviceStatus != null) {
                 announced = true
@@ -746,6 +804,7 @@ class VentyController(context: Context) {
         const val KEY_ADDRESS = "address"
         const val KEY_NAME = "name"
         const val KEY_KIND = "kind"
+        const val KEY_IDLE_DISCONNECTED = "idle_disconnected"
     }
 }
 
