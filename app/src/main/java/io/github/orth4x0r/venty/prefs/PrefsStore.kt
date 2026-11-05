@@ -115,6 +115,7 @@ class PrefsStore(context: Context) {
             .putString("accent", prefs.accent.name)
             .putBoolean("heat_haptics", prefs.heatHaptics)
             .putBoolean("check_updates", prefs.checkUpdates)
+            .putInt("idle_disconnect_min", prefs.idleDisconnectMinutes)
             .apply()
     }
 
@@ -140,6 +141,8 @@ class PrefsStore(context: Context) {
         accent = Accent.fromName(sp.getString("accent", null)),
         heatHaptics = sp.getBoolean("heat_haptics", true),
         checkUpdates = sp.getBoolean("check_updates", true),
+        idleDisconnectMinutes = sp.getInt("idle_disconnect_min", AppPrefs.DEFAULT_IDLE_DISCONNECT_MIN)
+            .takeIf { it in AppPrefs.IDLE_DISCONNECT_STEPS } ?: AppPrefs.DEFAULT_IDLE_DISCONNECT_MIN,
     )
 
     private val _deviceColor = MutableStateFlow(

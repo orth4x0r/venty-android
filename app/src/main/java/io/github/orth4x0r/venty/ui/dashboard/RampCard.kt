@@ -26,6 +26,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -37,6 +39,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -96,7 +99,8 @@ import kotlin.math.roundToInt
 import androidx.compose.foundation.interaction.MutableInteractionSource
 
 /**
- * Ramp session: set up a climb (start, step, interval, peak, hold), then watch it run on a
+ * Ramp session: set up a climb, either simply (start, finish, bowl length, optional plateau) or
+ * step by step (start, step, interval, peak, hold), then watch it run on a
  * staircase chart with a glowing marker, a "+2°" that floats up on every step, and a countdown.
  */
 @Composable
@@ -228,9 +232,21 @@ private fun IdleBody(
     onRemoveProfile: (RampProfile) -> Unit,
 ) {
     var editing by rememberSaveable { mutableStateOf(false) }
+    var simple by rememberSaveable { mutableStateOf(true) }
     val minC = kind.minTarget / 10
     val maxC = kind.maxTarget / 10
     fun change(p: RampPlan) = onPlan(p.fitTo(minC, maxC))
+    // Simple mode reads the plan back as start, finish, bowl length and plateau, and rebuilds it
+    // from those, so the steps are worked out for you.
+    val bowlMs = roundTo30s(plan.totalMs)
+    val plateauMs = roundTo30s(plan.holdMs)
+    fun span(start: Int = plan.startC, finish: Int = plan.peakC, total: Long = bowlMs, plateau: Long = plateauMs) {
+        val s = start.coerceIn(minC, maxC)
+        val f = finish.coerceIn(s, maxC)
+        val t = total.coerceIn(RampPlan.MIN_SESSION_MS, RampPlan.MAX_SESSION_MS)
+        val h = plateau.coerceIn(0L, minOf(RampPlan.MAX_HOLD_MS, t - 60_000L))
+        onPlan(RampPlan.span(s, f, t, h))
+    }
     Column {
         ProfileChips(
             profiles = profiles,
@@ -240,7 +256,13 @@ private fun IdleBody(
             onRemove = onRemoveProfile,
         )
         Spacer(Modifier.height(8.dp))
-        Text(summary(plan, fahrenheit), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        AnimatedContent(
+            targetState = if (simple) simpleSummary(plan, fahrenheit) else summary(plan, fahrenheit),
+            transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(120)) },
+            label = "rampSummary",
+        ) { text ->
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        }
         Text(
             if (editing) "Done" else "Adjust",
             style = MaterialTheme.typography.labelLarge,
@@ -253,26 +275,119 @@ private fun IdleBody(
         )
         AnimatedVisibility(visible = editing, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)) {
+                ModeToggle(simple, onChange = { simple = it })
+                Spacer(Modifier.height(2.dp))
                 val u = "°${Temperature.unit(fahrenheit)}"
-                StepRow("Start at", "${Temperature.toDisplay(plan.startC * 10, fahrenheit)}$u",
-                    onMinus = { change(plan.copy(startC = plan.startC - 1)) },
-                    onPlus = { change(plan.copy(startC = plan.startC + 1, peakC = maxOf(plan.peakC, plan.startC + 1))) })
-                StepRow("Climb", "+${delta(plan.stepC, fahrenheit)}$u",
-                    onMinus = { change(plan.copy(stepC = plan.stepC - 1)) },
-                    onPlus = { change(plan.copy(stepC = plan.stepC + 1)) })
-                StepRow("Every", clockWords(plan.stepEveryMs),
-                    onMinus = { change(plan.copy(stepEveryMs = plan.stepEveryMs - 30_000L)) },
-                    onPlus = { change(plan.copy(stepEveryMs = plan.stepEveryMs + 30_000L)) })
-                StepRow("Up to", "${Temperature.toDisplay(plan.peakC * 10, fahrenheit)}$u",
-                    onMinus = { change(plan.copy(peakC = plan.peakC - 1)) },
-                    onPlus = { change(plan.copy(peakC = plan.peakC + 1)) })
-                StepRow("Then hold", if (plan.holdMs == 0L) "No hold" else clockWords(plan.holdMs),
-                    onMinus = { change(plan.copy(holdMs = plan.holdMs - 60_000L)) },
-                    onPlus = { change(plan.copy(holdMs = plan.holdMs + 60_000L)) })
+                AnimatedContent(
+                    targetState = simple,
+                    transitionSpec = {
+                        val dir = if (targetState) -1 else 1
+                        (fadeIn(tween(220, delayMillis = 60)) + slideInHorizontally(tween(260)) { it / 6 * dir }) togetherWith
+                            (fadeOut(tween(120)) + slideOutHorizontally(tween(200)) { -it / 6 * dir })
+                    },
+                    label = "rampMode",
+                ) { isSimple ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (isSimple) {
+                            StepRow("Start at", "${Temperature.toDisplay(plan.startC * 10, fahrenheit)}$u",
+                                onMinus = { span(start = plan.startC - 1) },
+                                onPlus = { span(start = plan.startC + 1, finish = maxOf(plan.peakC, plan.startC + 1)) })
+                            StepRow("Finish at", "${Temperature.toDisplay(plan.peakC * 10, fahrenheit)}$u",
+                                onMinus = { span(finish = plan.peakC - 1) },
+                                onPlus = { span(finish = plan.peakC + 1) })
+                            StepRow("Bowl length", clockWords(bowlMs),
+                                onMinus = { span(total = bowlMs - 30_000L) },
+                                onPlus = { span(total = bowlMs + 30_000L) })
+                            StepRow("Plateau", if (plateauMs == 0L) "Off" else clockWords(plateauMs),
+                                onMinus = { span(plateau = plateauMs - 30_000L) },
+                                onPlus = { span(plateau = plateauMs + 30_000L) })
+                            Text(
+                                if (plateauMs == 0L) "Climbs the whole bowl. Add a plateau to hold at the finish temperature at the end."
+                                else "Climbs for ${clockWords(plan.rampMs)}, then holds at the finish temperature.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = VentyColors.Muted,
+                            )
+                        } else {
+                            StepRow("Start at", "${Temperature.toDisplay(plan.startC * 10, fahrenheit)}$u",
+                                onMinus = { change(plan.copy(startC = plan.startC - 1)) },
+                                onPlus = { change(plan.copy(startC = plan.startC + 1, peakC = maxOf(plan.peakC, plan.startC + 1))) })
+                            StepRow("Climb", "+${delta(plan.stepC, fahrenheit)}$u",
+                                onMinus = { change(plan.copy(stepC = plan.stepC - 1)) },
+                                onPlus = { change(plan.copy(stepC = plan.stepC + 1)) })
+                            StepRow("Every", clockWords(plan.stepEveryMs),
+                                onMinus = { change(plan.copy(stepEveryMs = plan.stepEveryMs - 30_000L)) },
+                                onPlus = { change(plan.copy(stepEveryMs = plan.stepEveryMs + 30_000L)) })
+                            StepRow("Up to", "${Temperature.toDisplay(plan.peakC * 10, fahrenheit)}$u",
+                                onMinus = { change(plan.copy(peakC = plan.peakC - 1)) },
+                                onPlus = { change(plan.copy(peakC = plan.peakC + 1)) })
+                            StepRow("Then hold", if (plan.holdMs == 0L) "No hold" else clockWords(plan.holdMs),
+                                onMinus = { change(plan.copy(holdMs = plan.holdMs - 60_000L)) },
+                                onPlus = { change(plan.copy(holdMs = plan.holdMs + 60_000L)) })
+                        }
+                    }
+                }
             }
         }
         Spacer(Modifier.height(6.dp))
         RampButton("Start ramp", Icons.Rounded.PlayArrow, filled = true, onClick = onStart, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * "Simple" (start, finish, bowl length, plateau) or "Steps" (the full step-by-step setup). The
+ * selected side sits on a heat gradient pill that springs across when you switch.
+ */
+@Composable
+private fun ModeToggle(simple: Boolean, onChange: (Boolean) -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    val slide by animateFloatAsState(
+        if (simple) 0f else 1f,
+        spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow),
+        label = "modeSlide",
+    )
+    val heat = VentyColors.Heat
+    val ember = VentyColors.Ember
+    BoxWithConstraints(
+        Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .clip(VentyShapes.Pill)
+            .background(VentyColors.Track),
+    ) {
+        val half = maxWidth / 2
+        Box(
+            Modifier
+                .offset { IntOffset((half.toPx() * slide).roundToInt(), 0) }
+                .width(half)
+                .fillMaxHeight()
+                .padding(3.dp)
+                .clip(VentyShapes.Pill)
+                .background(Brush.horizontalGradient(listOf(heat, ember))),
+        )
+        Row(Modifier.matchParentSize()) {
+            listOf(true to "Simple", false to "Steps").forEach { (value, label) ->
+                val selected = value == simple
+                val fg by animateColorAsState(
+                    if (selected) VentyColors.Background else MaterialTheme.colorScheme.onSurface,
+                    label = "modeFg",
+                )
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(VentyShapes.Pill)
+                        .clickable {
+                            if (!selected) {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onChange(value)
+                            }
+                        },
+                ) {
+                    Text(label, style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold), color = fg)
+                }
+            }
+        }
     }
 }
 
@@ -480,6 +595,14 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
             // Where the climb ends and the hold begins.
             val holdX = w * plan.rampMs / total
             clipRect(right = w * reveal.value) {
+                // The plateau gets a warm band so the hold at the top reads at a glance.
+                if (plan.holdMs > 0) {
+                    drawRect(
+                        Brush.verticalGradient(listOf(ember.copy(alpha = 0.16f), Color.Transparent)),
+                        topLeft = Offset(holdX, h * yFrac(plan.peakC)),
+                        size = androidx.compose.ui.geometry.Size(w - holdX, h * (1f - yFrac(plan.peakC))),
+                    )
+                }
                 drawPath(line, track, style = stroke)
                 if (plan.holdMs > 0) {
                     drawLine(track, Offset(holdX, 0f), Offset(holdX, h), strokeWidth = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
@@ -550,6 +673,21 @@ private fun summary(p: RampPlan, f: Boolean): String {
     val hold = if (p.holdMs == 0L) "then the heater turns off." else "then holds for ${clockWords(p.holdMs)} and turns off."
     return "$climb, $hold"
 }
+
+private fun simpleSummary(p: RampPlan, f: Boolean): String {
+    val start = Temperature.toDisplay(p.startC * 10, f)
+    val finish = Temperature.toDisplay(p.peakC * 10, f)
+    val bowl = clockWords(roundTo30s(p.totalMs))
+    val plateau = roundTo30s(p.holdMs)
+    return when {
+        p.steps == 0 -> "Holds $finish° for $bowl, then the heater turns off."
+        plateau == 0L -> "$start° to $finish° across a $bowl bowl, then the heater turns off."
+        else -> "$start° to $finish° across a $bowl bowl, holding $finish° for the last ${clockWords(plateau)}."
+    }
+}
+
+/** Simple mode edits in 30 s steps, and spreading the climb leaves a few ms of rounding to hide. */
+private fun roundTo30s(ms: Long): Long = (ms + 15_000L) / 30_000L * 30_000L
 
 /** A step size in the display unit. */
 private fun delta(stepC: Int, f: Boolean): Int = if (f) (stepC * 9 / 5.0).roundToInt() else stepC

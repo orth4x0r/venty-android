@@ -109,6 +109,17 @@ class VentyProtocolTest {
     }
 
     @Test
+    fun `boost offsets count in fahrenheit when the device is set to it`() {
+        // Reported on Reddit: 356 °F base with +30 °F boost showed 410 °F (30 read as °C) instead of 386 °F.
+        val base = VentyProtocol.parseStatus(padded(0x01, 0, 0, 0x80, 0x08, 0x07, 30, 30))!!.copy(fahrenheit = true)
+        assertEquals(1800, base.copy(heaterMode = HeaterMode.On).effectiveTargetTenths)
+        val boost = base.copy(heaterMode = HeaterMode.Boost).effectiveTargetTenths
+        assertEquals(386, io.github.orth4x0r.venty.ui.Temperature.toDisplay(boost, true))
+        // 356 + 60 °F is past the cap, so superboost shows the 410 °F maximum.
+        assertEquals(2100, base.copy(heaterMode = HeaterMode.SuperBoost).effectiveTargetTenths)
+    }
+
+    @Test
     fun `encode and parse round trip`() {
         val s = VentyStatus(
             currentTenths = 1712, targetTenths = 1900, boostOffset = 12, superBoostOffset = 8,
