@@ -68,6 +68,7 @@ All captured in the built-in demo mode, no device needed.
 - Ramp profiles that step the temperature up through a session on their own
 - Find my device with a radar that shows how close you are (signal strength), plus °C / °F, brightness, vibration, eco charging and boost timeout
 - Auto-reconnect with backoff, and a foreground service that keeps the link alive in the background
+- Battery care: with the app in the background and the heater off, it polls slowly and lets go of the Venty after 5 minutes (adjustable in Settings, or "Never") so it can sleep. Opening the app reconnects
 - "Connect when it turns on" (Android 12+): Android wakes the app when your device starts advertising, even after you swipe it away. Not after **Force stop**, though: Android keeps a force-stopped app asleep until you open it again, so swipe it away instead
 
 **Sessions**

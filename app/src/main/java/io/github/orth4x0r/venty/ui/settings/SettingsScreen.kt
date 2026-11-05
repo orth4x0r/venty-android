@@ -103,11 +103,19 @@ data class AppPrefs(
     val accent: Accent = Accent.Device,
     /** A heartbeat buzz on the phone during heat-up and a pulse when ready. */
     val heatHaptics: Boolean = true,
+    /**
+     * With the app in the background and the heater off, disconnect after this many minutes so
+     * the device can sleep. 0 stays connected.
+     */
+    val idleDisconnectMinutes: Int = DEFAULT_IDLE_DISCONNECT_MIN,
 ) {
     companion object {
         const val DEFAULT_PUFF_TARGET_S = 8
         const val MIN_PUFF_TARGET_S = 3
         const val MAX_PUFF_TARGET_S = 20
+        const val DEFAULT_IDLE_DISCONNECT_MIN = 5
+        /** The choices on the idle disconnect slider, in minutes; 0 is "never". */
+        val IDLE_DISCONNECT_STEPS = listOf(1, 2, 5, 10, 15, 30, 0)
     }
 }
 
@@ -327,6 +335,21 @@ fun SettingsScreen(
 
         SectionHeader("Connection", Modifier.enterFromBelow(392))
         SettingsCard(Modifier.enterFromBelow(400)) {
+            val idleSteps = AppPrefs.IDLE_DISCONNECT_STEPS
+            val idleLabel = { m: Int -> if (m <= 0) "Never" else "$m min" }
+            SliderRow(
+                icon = Icons.Rounded.BatteryChargingFull,
+                title = "Disconnect when idle",
+                subtitle = "With the app closed and the heater off, let go so the ${kind.displayName} can sleep. Opening the app reconnects",
+                valueLabel = idleLabel(appPrefs.idleDisconnectMinutes),
+                value = idleSteps.indexOf(appPrefs.idleDisconnectMinutes).coerceAtLeast(0).toFloat(),
+                range = 0f..(idleSteps.size - 1).toFloat(),
+                steps = idleSteps.size - 2,
+                enabled = true,
+                labelFor = { idleLabel(idleSteps[it.roundToInt()]) },
+                onCommit = { onAppPrefs(appPrefs.copy(idleDisconnectMinutes = idleSteps[it.roundToInt()])) },
+            )
+            RowDivider()
             ConnectionRows(kind, deviceAddress, deviceName, onPairingHold, onPairingDone)
         }
 
