@@ -114,6 +114,7 @@ class PrefsStore(context: Context) {
             .putBoolean("puff_buzz", prefs.puffBuzz)
             .putString("accent", prefs.accent.name)
             .putBoolean("heat_haptics", prefs.heatHaptics)
+            .putBoolean("check_updates", prefs.checkUpdates)
             .apply()
     }
 
@@ -138,6 +139,7 @@ class PrefsStore(context: Context) {
         puffBuzz = sp.getBoolean("puff_buzz", true),
         accent = Accent.fromName(sp.getString("accent", null)),
         heatHaptics = sp.getBoolean("heat_haptics", true),
+        checkUpdates = sp.getBoolean("check_updates", true),
     )
 
     private val _deviceColor = MutableStateFlow(

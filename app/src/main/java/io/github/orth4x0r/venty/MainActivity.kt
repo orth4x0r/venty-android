@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.orth4x0r.venty.ui.VentyRoot
 import io.github.orth4x0r.venty.ui.theme.VentyTheme
+import io.github.orth4x0r.venty.update.AppUpdater
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -26,5 +27,10 @@ class MainActivity : ComponentActivity() {
                 VentyRoot(controller)
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        AppUpdater.maybeAutoCheck(this, (application as VentyApp).prefs.app.value.checkUpdates)
     }
 }
