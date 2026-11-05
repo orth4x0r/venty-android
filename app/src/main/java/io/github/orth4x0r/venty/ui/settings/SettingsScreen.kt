@@ -19,6 +19,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Update
+import androidx.compose.ui.text.style.TextOverflow
+import io.github.orth4x0r.venty.update.AppUpdater
+import io.github.orth4x0r.venty.update.UpdateInfo
 import io.github.orth4x0r.venty.companion.CompanionLink
 import io.github.orth4x0r.venty.ble.DeviceKind
 import io.github.orth4x0r.venty.ble.VolcanoProtocol
@@ -103,6 +121,8 @@ data class AppPrefs(
     val accent: Accent = Accent.Device,
     /** A heartbeat buzz on the phone during heat-up and a pulse when ready. */
     val heatHaptics: Boolean = true,
+    /** Look for a new release on GitHub when the app opens, at most twice a day. */
+    val checkUpdates: Boolean = true,
     /**
      * With the app in the background and the heater off, disconnect after this many minutes so
      * the device can sleep. 0 stays connected.
@@ -146,6 +166,9 @@ fun SettingsScreen(
 ) {
     val hasStatus = status != null
     val hasSettings = deviceSettings != null
+    val context = LocalContext.current
+    val updateState by AppUpdater.state.collectAsStateWithLifecycle()
+    val pendingUpdate = updateState.pendingUpdate()
 
     Column(
         Modifier
@@ -165,6 +188,16 @@ fun SettingsScreen(
             }
             Spacer(Modifier.width(4.dp))
             Text("Settings", style = MaterialTheme.typography.titleLarge)
+        }
+
+        // A found update goes first, where it can't be missed.
+        AnimatedVisibility(
+            visible = pendingUpdate != null,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+            modifier = Modifier.enterFromBelow(40),
+        ) {
+            pendingUpdate?.let { UpdateCard(updateState, it, AppUpdater.currentVersion(context)) }
         }
 
         // Headers and cards rise in one after another; the cards are translucent so the
@@ -362,6 +395,32 @@ fun SettingsScreen(
                 RowDivider()
                 FindMyButton(enabled = hasStatus, onClick = onFindMy)
             }
+        }
+
+        SectionHeader("Updates", Modifier.enterFromBelow(462))
+        SettingsCard(Modifier.enterFromBelow(470)) {
+            SwitchRow(
+                icon = Icons.Rounded.Update,
+                title = "Check for updates",
+                subtitle = "Asks GitHub for a new version when the app opens, twice a day at most",
+                checked = appPrefs.checkUpdates,
+                enabled = true,
+                onChange = { onAppPrefs(appPrefs.copy(checkUpdates = it)) },
+            )
+            RowDivider()
+            val version = AppUpdater.currentVersion(context)
+            ActionRow(
+                icon = Icons.Rounded.SystemUpdate,
+                title = "Check now",
+                subtitle = when (val u = updateState) {
+                    AppUpdater.State.Checking -> "Version $version · checking…"
+                    is AppUpdater.State.UpToDate -> "Version $version · up to date"
+                    is AppUpdater.State.Failed -> if (u.update == null) u.message else "Version $version · ${u.update.version} is out"
+                    AppUpdater.State.Idle -> "Version $version"
+                    else -> "Version $version · ${pendingUpdate?.version} is out"
+                },
+                onClick = { AppUpdater.check(context) },
+            )
         }
 
         if (linkEvents.isNotEmpty()) {
@@ -744,3 +803,128 @@ private fun AccentRow(selected: Accent, enabled: Boolean, onSelect: (Accent) -> 
         }
     }
 }
+
+/** The update the top card is about, if any. */
+private fun AppUpdater.State.pendingUpdate(): UpdateInfo? = when (this) {
+    is AppUpdater.State.Available -> update
+    is AppUpdater.State.Downloading -> update
+    is AppUpdater.State.Confirm -> update
+    is AppUpdater.State.Failed -> update
+    else -> null
+}
+
+/** "Version X is out": the notes, then one button that downloads, shows progress, and installs. */
+@Composable
+private fun UpdateCard(state: AppUpdater.State, update: UpdateInfo, current: String) {
+    val context = LocalContext.current
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .padding(top = 16.dp)
+            .fillMaxWidth()
+            .clip(VentyShapes.Large)
+            .background(
+                Brush.linearGradient(
+                    listOf(VentyColors.Heat.copy(alpha = 0.22f), VentyColors.Surface.copy(alpha = 0.9f)),
+                ),
+            )
+            .animateContentSize()
+            .padding(20.dp),
+    ) {
+        Text("Version ${update.version} is out", style = MaterialTheme.typography.titleMedium)
+        Text("You have $current", style = MaterialTheme.typography.bodySmall, color = VentyColors.Muted)
+        if (update.notes.isNotBlank()) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                update.notes,
+                style = MaterialTheme.typography.bodyMedium,
+                color = VentyColors.OnSurface.copy(alpha = 0.85f),
+                maxLines = if (expanded) Int.MAX_VALUE else 6,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { expanded = !expanded },
+            )
+        }
+        val message = when (state) {
+            is AppUpdater.State.Available -> state.hint
+            is AppUpdater.State.Failed -> state.message
+            else -> null
+        }
+        if (message != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(message, style = MaterialTheme.typography.bodySmall, color = VentyColors.Ember)
+        }
+        Spacer(Modifier.height(16.dp))
+        val busy = state is AppUpdater.State.Downloading
+        val progress = (state as? AppUpdater.State.Downloading)?.progress
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .clip(VentyShapes.Small)
+                .background(VentyColors.Heat.copy(alpha = 0.16f))
+                .clickable(enabled = !busy, role = Role.Button) {
+                    when (state) {
+                        is AppUpdater.State.Confirm -> AppUpdater.confirm(context, state.intent)
+                        else -> AppUpdater.install(context, update)
+                    }
+                },
+        ) {
+            if (busy) DownloadFill(progress)
+            Text(
+                when (state) {
+                    is AppUpdater.State.Downloading ->
+                        if (progress != null) "Downloading ${(progress * 100).roundToInt()}%" else "Downloading…"
+                    is AppUpdater.State.Confirm -> "Install"
+                    is AppUpdater.State.Failed -> "Try again"
+                    else -> "Download and install" + (update.apkSize.takeIf { it > 0 }?.let { " · ${megabytes(it)}" } ?: "")
+                },
+                style = MaterialTheme.typography.labelLarge,
+                color = VentyColors.Ember,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "See it on GitHub",
+            style = MaterialTheme.typography.bodySmall,
+            color = VentyColors.Muted,
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .clip(VentyShapes.Small)
+                .clickable(role = Role.Button) {
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.pageUrl))) }
+                }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        )
+    }
+}
+
+/** The button fills with heat as the APK downloads, with a glint sweeping across the filled part. */
+@Composable
+private fun DownloadFill(progress: Float?) {
+    val fill by animateFloatAsState(progress ?: 1f, spring(dampingRatio = 1f, stiffness = 200f), label = "updateFill")
+    val glint by rememberInfiniteTransition(label = "updateGlint").animateFloat(
+        initialValue = -0.3f,
+        targetValue = 1.3f,
+        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing)),
+        label = "updateGlintX",
+    )
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(fill)
+                .background(
+                    Brush.horizontalGradient(
+                        0f to VentyColors.Heat.copy(alpha = 0.35f),
+                        (glint - 0.15f).coerceIn(0f, 1f) to VentyColors.Heat.copy(alpha = 0.35f),
+                        glint.coerceIn(0f, 1f) to VentyColors.Heat.copy(alpha = 0.6f),
+                        (glint + 0.15f).coerceIn(0f, 1f) to VentyColors.Heat.copy(alpha = 0.35f),
+                        1f to VentyColors.Heat.copy(alpha = 0.35f),
+                    ),
+                ),
+        )
+    }
+}
+
+private fun megabytes(bytes: Long) = "%.1f MB".format(bytes / 1_048_576.0)

@@ -34,6 +34,7 @@ import io.github.orth4x0r.venty.ui.history.HistoryScreen
 import io.github.orth4x0r.venty.ui.session.LiveSessionStrip
 import io.github.orth4x0r.venty.ui.session.PuffTimer
 import io.github.orth4x0r.venty.ui.settings.SettingsScreen
+import io.github.orth4x0r.venty.update.AppUpdater
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
@@ -206,6 +207,9 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     val status by controller.status.collectAsStateWithLifecycle()
     val info by controller.info.collectAsStateWithLifecycle()
     val deviceSettings by controller.deviceSettings.collectAsStateWithLifecycle()
+    val updateState by AppUpdater.state.collectAsStateWithLifecycle()
+    val updateAvailable = updateState is AppUpdater.State.Available || updateState is AppUpdater.State.Downloading ||
+        updateState is AppUpdater.State.Confirm
     val linkEvents by controller.linkEvents.collectAsStateWithLifecycle()
     val prefs by app.prefs.app.collectAsStateWithLifecycle()
     val presets by app.prefs.presets.collectAsStateWithLifecycle()
@@ -433,6 +437,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                 demo = (connection as? ConnectionState.Connected)?.demo == true,
                                 onHistory = { openPage(Page.History) },
                                 onSettings = { openPage(Page.Settings) },
+                                updateAvailable = updateAvailable,
                                 onDisconnect = controller::disconnect,
                                 onForget = controller::forgetDevice,
                             )
@@ -1729,6 +1734,7 @@ private fun TopBar(
     onSettings: () -> Unit,
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
+    updateAvailable: Boolean = false,
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
@@ -1775,7 +1781,28 @@ private fun TopBar(
         }
         if (status != null && kind.hasBattery) BatteryBadge(status.battery, status.charging)
         IconButton(onClick = onHistory) { Icon(Icons.Rounded.BarChart, "History") }
-        IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
+        IconButton(onClick = onSettings) {
+            Box {
+                Icon(Icons.Rounded.Settings, if (updateAvailable) "Settings, update available" else "Settings")
+                // A glowing dot while a new version waits in Settings.
+                if (updateAvailable) {
+                    val glow by rememberInfiniteTransition(label = "updateDot").animateFloat(
+                        initialValue = 0.55f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+                        label = "updateDotA",
+                    )
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .size(8.dp)
+                            .graphicsLayer { alpha = glow; scaleX = 0.8f + 0.2f * glow; scaleY = 0.8f + 0.2f * glow }
+                            .clip(CircleShape)
+                            .background(VentyColors.Heat),
+                    )
+                }
+            }
+        }
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
