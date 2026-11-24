@@ -1,7 +1,6 @@
 package io.github.orth4x0r.venty.ble
 
 import java.util.UUID
-import kotlin.math.roundToInt
 
 /**
  * Packet encoding and decoding for the Venty's "qvap" protocol. See docs/PROTOCOL.md.
@@ -131,7 +130,10 @@ object VentyProtocol {
         val flags = data.u8(14)
         return VentyStatus(
             currentTenths = current.takeIf { it != TEMP_NOT_AVAILABLE },
+            // In boost and superboost the Venty reports the boosted target here; the controller
+            // works the base back out (see VentyStatus.withBase).
             targetTenths = data.u16(4),
+            reportedTargetTenths = data.u16(4),
             boostOffset = data.u8(6),
             superBoostOffset = data.u8(7),
             battery = data.u8(8).coerceIn(0, 100),
@@ -161,7 +163,8 @@ object VentyProtocol {
     /** The inverse of [parseStatus]. Used by the demo device and tests. */
     fun encodeStatus(s: VentyStatus): ByteArray = packet(CMD_STATUS).also {
         it.putU16(2, s.currentTenths ?: TEMP_NOT_AVAILABLE)
-        it.putU16(4, s.targetTenths)
+        // As the device does: the boosted target while boosting.
+        it.putU16(4, s.effectiveTargetTenths)
         it[6] = s.boostOffset.toByte()
         it[7] = s.superBoostOffset.toByte()
         it[8] = s.battery.toByte()
@@ -237,6 +240,12 @@ data class VentyStatus(
     val currentTenths: Int?,
     /** The base setpoint, without boost offsets. */
     val targetTenths: Int,
+    /**
+     * The target exactly as the Venty reported it, which in boost and superboost already includes
+     * the offsets (checked on firmware V01.11). Null when it no longer matches what's shown, for
+     * example while a change the user just made is waiting to be confirmed.
+     */
+    val reportedTargetTenths: Int? = null,
     val boostOffset: Int,
     val superBoostOffset: Int,
     val battery: Int,
@@ -251,20 +260,49 @@ data class VentyStatus(
     /** "Bluetooth permanent" (settings2 bit 0), or null when the packet was too short to carry it. */
     val blePermanent: Boolean? = false,
 ) {
-    /** What the heater is actually aiming for, including any active boost. The Venty tops out at 210 °C. */
+    /**
+     * What the heater is actually aiming for, including any active boost: as the Venty reported
+     * it when known, otherwise worked out from the base and offsets. The Venty tops out at 210 °C.
+     */
     val effectiveTargetTenths: Int
-        get() = targetFor(heaterMode)
+        get() = reportedTargetTenths ?: targetFor(heaterMode)
 
     fun targetFor(mode: HeaterMode): Int = when (mode) {
-        HeaterMode.Boost -> minOf(VentyProtocol.MAX_TARGET, targetTenths + offsetTenths(boostOffset))
-        HeaterMode.SuperBoost -> minOf(VentyProtocol.MAX_TARGET, targetTenths + offsetTenths(boostOffset + superBoostOffset))
+        HeaterMode.Boost, HeaterMode.SuperBoost -> minOf(VentyProtocol.MAX_TARGET, uncappedTargetFor(mode))
         // Unboosted, the setpoint stands as is: a Volcano's goes past the Venty's 210 °C.
         else -> targetTenths
     }
 
-    /** The offsets count in the device's display unit: a Venty set to °F reports +30 for +30 °F. */
-    private fun offsetTenths(degrees: Int): Int =
-        if (fahrenheit) (degrees * 50 / 9.0).roundToInt() else degrees * 10
+    /** Setpoint plus the mode's offsets, before the Venty's 210 °C limit. */
+    fun uncappedTargetFor(mode: HeaterMode): Int = when (mode) {
+        HeaterMode.Boost -> targetTenths + offsetTenths(boostOffset)
+        HeaterMode.SuperBoost -> targetTenths + offsetTenths(boostOffset + superBoostOffset)
+        else -> targetTenths
+    }
+
+    /**
+     * The offsets are whole °C, also on a Venty set to °F: at a 190 °C (374 °F) base, a +15 boost
+     * made the device report 205 °C (401 °F), not 374 + 15 °F (checked on firmware V01.11).
+     */
+    private fun offsetTenths(degrees: Int): Int = degrees * 10
+
+    /**
+     * Puts the base setpoint back into [targetTenths] for a status read while boosting, when the
+     * Venty reports the boosted target. [lastNormalTenths] is the target last seen outside boost:
+     * kept if it still adds up to what's reported, since a capped boost can't be undone exactly.
+     */
+    fun withBase(lastNormalTenths: Int?): VentyStatus {
+        if (heaterMode != HeaterMode.Boost && heaterMode != HeaterMode.SuperBoost) return this
+        val reported = reportedTargetTenths ?: targetTenths
+        val offsets = uncappedTargetFor(heaterMode) - targetTenths
+        fun boosted(base: Int) = minOf(VentyProtocol.MAX_TARGET, base + offsets)
+        val base = when {
+            lastNormalTenths != null && boosted(lastNormalTenths) == reported -> lastNormalTenths
+            reported < VentyProtocol.MAX_TARGET -> reported - offsets
+            else -> lastNormalTenths ?: (reported - offsets)
+        }.coerceAtLeast(VentyProtocol.MIN_TARGET)
+        return copy(targetTenths = base, reportedTargetTenths = reported)
+    }
 }
 
 /** Display and feel settings from cmd `0x06`. */

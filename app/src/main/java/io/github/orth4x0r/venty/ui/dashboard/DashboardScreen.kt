@@ -1387,9 +1387,11 @@ private fun Sparkline(samples: List<BatterySample>, color: Color, modifier: Modi
 @Composable
 private fun StatusPill(phase: HeaterPhase, s: VentyStatus) {
     val color by animateColorAsState(phase.color, label = "pill")
+    // How far above the base the heater is aiming, in the display unit (less than the offsets
+    // when the 210 °C limit cuts them short).
+    val lift = Temperature.toDisplay(s.effectiveTargetTenths, s.fahrenheit) - Temperature.toDisplay(s.targetTenths, s.fahrenheit)
     val extra = when (phase) {
-        HeaterPhase.Boost -> " +${s.boostOffset}°"
-        HeaterPhase.SuperBoost -> " +${s.boostOffset + s.superBoostOffset}°"
+        HeaterPhase.Boost, HeaterPhase.SuperBoost -> " +$lift°"
         else -> ""
     }
     // While ready, the dot sends out a slow ping and a band of light crosses the pill now and
@@ -1729,9 +1731,10 @@ private fun DeviceCard(
 ) {
     Card {
         if (kind.hasBoost) {
-            OffsetRow("Boost", s.boostOffset, VentyColors.Boost, onBoost)
+            // The Venty keeps both offsets in °C, whatever unit it displays.
+            OffsetRow("Boost", s.boostOffset, VentyColors.Boost, onBoost, hint = if (s.fahrenheit) "in °C" else null)
             Spacer(Modifier.height(8.dp))
-            OffsetRow("Superboost", s.superBoostOffset, VentyColors.SuperBoost, onSuperBoost, hint = "on top of boost")
+            OffsetRow("Superboost", s.superBoostOffset, VentyColors.SuperBoost, onSuperBoost, hint = if (s.fahrenheit) "on top of boost, in °C" else "on top of boost")
             Spacer(
                 Modifier
                     .padding(vertical = 16.dp)

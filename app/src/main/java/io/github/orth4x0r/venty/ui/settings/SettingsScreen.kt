@@ -63,6 +63,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Bolt
@@ -98,6 +100,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.orth4x0r.venty.ble.DeviceSettings
+import io.github.orth4x0r.venty.ble.DiagLog
 import io.github.orth4x0r.venty.ble.LinkEvent
 import io.github.orth4x0r.venty.ble.VentyProtocol
 import io.github.orth4x0r.venty.ble.VentyStatus
@@ -449,6 +452,33 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        SectionHeader("Diagnostics", Modifier.enterFromBelow(530))
+        SettingsCard(Modifier.enterFromBelow(545)) {
+            var cleared by remember { mutableStateOf(false) }
+            ActionRow(
+                icon = Icons.Rounded.Share,
+                title = "Share diagnostics log",
+                subtitle = "What the device reports next to what the app shows, and every change the app sends",
+                onClick = {
+                    val send = Intent(Intent.ACTION_SEND)
+                        .setType("text/plain")
+                        .putExtra(Intent.EXTRA_SUBJECT, "Venty diagnostics")
+                        .putExtra(Intent.EXTRA_TEXT, DiagLog.dump().ifEmpty { "(empty)" })
+                    context.startActivity(Intent.createChooser(send, "Share diagnostics log"))
+                },
+            )
+            RowDivider()
+            ActionRow(
+                icon = Icons.Rounded.DeleteOutline,
+                title = if (cleared) "Log cleared" else "Clear diagnostics log",
+                subtitle = "Start fresh before reproducing a problem",
+                onClick = {
+                    DiagLog.clear()
+                    cleared = true
+                },
+            )
         }
 
         Spacer(Modifier.height(32.dp))
