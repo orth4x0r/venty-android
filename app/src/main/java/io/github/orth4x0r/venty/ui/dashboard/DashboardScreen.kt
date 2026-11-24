@@ -17,6 +17,7 @@ import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.prefs.BatterySample
 import io.github.orth4x0r.venty.prefs.Preset
 import io.github.orth4x0r.venty.session.RampCurve
+import io.github.orth4x0r.venty.session.RampPlan
 import io.github.orth4x0r.venty.ui.ramp.RampCreatorScreen
 import io.github.orth4x0r.venty.session.RampProfile
 import io.github.orth4x0r.venty.session.RampRun
@@ -287,7 +288,13 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
 
     // What the ramp creator opens with: the curve, its name, and the saved ramp it would replace.
     var creatorSeed by remember { mutableStateOf<CreatorSeed?>(null) }
-    fun seedCreator(): CreatorSeed {
+    fun seedCreator(new: Boolean = false): CreatorSeed {
+        // A new ramp starts as the classic climb in the device's unit, saved under a new name.
+        if (new) return CreatorSeed(
+            RampPlan().toCurve().inUnit(status?.fahrenheit == true),
+            nextProfileName(rampProfiles),
+            null,
+        )
         // Opens in the ramp's own unit; the creator has a °F/°C switch.
         val match = rampProfiles.firstOrNull { it.plan == rampPlan }
         return CreatorSeed(rampPlan, match?.name ?: nextProfileName(rampProfiles), match)
@@ -525,8 +532,8 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                     ramp = ramp,
                                     rampPlan = rampPlan,
                                     onRampPlan = app.prefs::setRamp,
-                                    onOpenRampCreator = {
-                                        creatorSeed = seedCreator()
+                                    onOpenRampCreator = { new ->
+                                        creatorSeed = seedCreator(new)
                                         openPage(Page.RampCreator)
                                     },
                                     onStartRamp = { controller.startRamp(rampPlan) },
@@ -694,7 +701,7 @@ private fun Dashboard(
     ramp: RampRun?,
     rampPlan: RampCurve,
     onRampPlan: (RampCurve) -> Unit,
-    onOpenRampCreator: () -> Unit,
+    onOpenRampCreator: (new: Boolean) -> Unit,
     onStartRamp: () -> Unit,
     onStopRamp: () -> Unit,
     rampProfiles: List<RampProfile>,

@@ -118,7 +118,8 @@ internal fun RampCard(
     profiles: List<RampProfile> = emptyList(),
     onSaveProfile: (RampProfile) -> Unit = {},
     onRemoveProfile: (RampProfile) -> Unit = {},
-    onOpenCreator: () -> Unit = {},
+    /** Opens the ramp creator: on the current ramp, or on a new one when the flag is set. */
+    onOpenCreator: (new: Boolean) -> Unit = {},
 ) {
     val shown = run?.plan ?: plan
     val running = run != null
@@ -240,7 +241,7 @@ private fun IdleBody(
     profiles: List<RampProfile>,
     onSaveProfile: (RampProfile) -> Unit,
     onRemoveProfile: (RampProfile) -> Unit,
-    onOpenCreator: () -> Unit,
+    onOpenCreator: (new: Boolean) -> Unit,
 ) {
     // The +/- rows below edit a steady climb, read back from the curve; anything else (from the
     // creator) is edited there.
@@ -285,7 +286,8 @@ private fun IdleBody(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             if (!custom) TextLink(if (editing) "Done" else "Adjust") { editing = !editing }
-            TextLink(if (custom) "Edit in creator" else "Ramp creator", onClick = onOpenCreator)
+            TextLink("Edit in creator") { onOpenCreator(false) }
+            TextLink("New ramp") { onOpenCreator(true) }
         }
         AnimatedVisibility(visible = editing && !custom, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)) {

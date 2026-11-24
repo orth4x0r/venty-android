@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -63,6 +64,7 @@ import io.github.orth4x0r.venty.ble.DeviceKind
 import io.github.orth4x0r.venty.session.RampCurve
 import io.github.orth4x0r.venty.session.RampMove
 import io.github.orth4x0r.venty.session.RampPoint
+import io.github.orth4x0r.venty.session.RampProfile
 import io.github.orth4x0r.venty.ui.Temperature
 import io.github.orth4x0r.venty.ui.dashboard.Card
 import io.github.orth4x0r.venty.ui.dashboard.RampButton
@@ -76,6 +78,32 @@ import kotlin.math.floor
 import kotlin.math.roundToInt
 
 private const val MAX_NAME = 24
+private const val MAX_STEP = 10
+
+/** Ramps to start from: the built-in ones, and a blank one to draw from scratch. */
+private val TEMPLATES: List<Pair<String, RampCurve>> =
+    RampProfile.DEFAULTS.map { it.name to it.plan } +
+        ("Blank" to RampCurve(listOf(RampPoint(0L, 180)), endMs = 10 * 60_000L))
+
+@Composable
+private fun Templates(onPick: (RampCurve) -> Unit) {
+    Column {
+        Text("Start from", style = MaterialTheme.typography.labelLarge, color = VentyColors.Muted, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TEMPLATES.forEach { (label, curve) ->
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier
+                        .clip(VentyShapes.Small)
+                        .background(VentyColors.Surface.copy(alpha = 0.82f))
+                        .clickable { onPick(curve) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+}
 
 /**
  * Draw a ramp by hand: points on a time/temperature graph, each reached from the one before
@@ -128,9 +156,20 @@ fun RampCreatorScreen(
         return lo..maxOf(lo, hi)
     }
 
-    fun setPoint(i: Int, atMs: Long = points[i].atMs, temp: Int = points[i].temp, move: RampMove = points[i].move) {
+    fun setPoint(
+        i: Int,
+        atMs: Long = points[i].atMs,
+        temp: Int = points[i].temp,
+        move: RampMove = points[i].move,
+        step: Int = points[i].step,
+    ) {
         val b = timeBounds(i)
-        val p = RampPoint(RampCurve.snap(atMs).coerceIn(b.first, b.last), temp.coerceIn(minD, maxD), move)
+        val p = RampPoint(
+            RampCurve.snap(atMs).coerceIn(b.first, b.last),
+            temp.coerceIn(minD, maxD),
+            move,
+            step.coerceIn(1, MAX_STEP),
+        )
         if (p == points[i]) return
         update(points.toMutableList().apply { set(i, p) })
     }
@@ -173,6 +212,12 @@ fun RampCreatorScreen(
             ) {
                 NameField(name, onChange = { name = it.take(MAX_NAME) })
 
+                Templates(onPick = { t ->
+                    curve = t.inUnit(curve.fahrenheit).fitToRange(kind.minTarget, kind.maxTarget)
+                    selected = if (curve.points.size > 1) 1 else 0
+                    hint = null
+                })
+
                 Column {
                     Text("Unit", style = MaterialTheme.typography.labelLarge, color = VentyColors.Muted, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
                     PillToggle(
@@ -184,7 +229,7 @@ fun RampCreatorScreen(
                         },
                     )
                     Text(
-                        "Temperatures and 1° steps are in ${if (curve.fahrenheit) "Fahrenheit" else "Celsius"}." +
+                        "Temperatures and step sizes are in ${if (curve.fahrenheit) "Fahrenheit" else "Celsius"}." +
                             if (curve.fahrenheit != fahrenheit) " Your device shows ${if (fahrenheit) "°F" else "°C"}; the ramp card converts." else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = VentyColors.Muted,
@@ -223,6 +268,7 @@ fun RampCreatorScreen(
                     onTemp = { setPoint(sel, temp = it) },
                     onTime = { setPoint(sel, atMs = it) },
                     onMove = { setPoint(sel, move = it) },
+                    onStep = { setPoint(sel, step = it) },
                     onDelete = {
                         update(points.toMutableList().apply { removeAt(sel) })
                         selected = sel - 1
@@ -297,6 +343,7 @@ private fun PointEditor(
     onTemp: (Int) -> Unit,
     onTime: (Long) -> Unit,
     onMove: (RampMove) -> Unit,
+    onStep: (Int) -> Unit,
     onDelete: () -> Unit,
 ) {
     val p = points[index]
@@ -333,7 +380,15 @@ private fun PointEditor(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text("Get there by", style = MaterialTheme.typography.titleSmall)
-                PillToggle(listOf(RampMove.Jump to "Jump", RampMove.Climb to "${p.step}$unit steps"), p.move, onMove)
+                PillToggle(listOf(RampMove.Jump to "Jump", RampMove.Climb to "Steps"), p.move, onMove)
+                if (p.move == RampMove.Climb) {
+                    StepRow(
+                        "Step size",
+                        "${p.step}$unit",
+                        onMinus = { onStep(p.step - 1) },
+                        onPlus = { onStep(p.step + 1) },
+                    )
+                }
                 val prev = points[index - 1]
                 val d = p.temp - prev.temp
                 val text = when {
