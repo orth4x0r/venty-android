@@ -1,5 +1,6 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
+import io.github.orth4x0r.venty.ui.theme.LocalDarkMode
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
@@ -66,7 +67,7 @@ internal fun PumpButton(on: Boolean, onToggle: (Boolean) -> Unit) {
     val content by animateColorAsState(if (on) Color(0xFF04211F) else VentyColors.Air, label = "pumpFg")
 
     // Only ticks while running, so an idle button costs nothing.
-    val flow = if (on) {
+    val flow = if (on && !LocalDarkMode.current) {
         rememberInfiniteTransition(label = "air").animateFloat(
             initialValue = 0f,
             targetValue = 1f,

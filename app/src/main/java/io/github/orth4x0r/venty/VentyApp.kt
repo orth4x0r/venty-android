@@ -32,6 +32,7 @@ class VentyApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        io.github.orth4x0r.venty.ble.DiagLog.init(this)
 
         // Load saved prefs, sessions and battery history off the main thread before the UI asks.
         scope.launch(Dispatchers.IO) { prefs; sessions; battery }

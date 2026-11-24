@@ -38,7 +38,7 @@ import kotlinx.coroutines.isActive
  */
 @Composable
 fun HeatAura(level: Float, color: Color, modifier: Modifier = Modifier) {
-    if (Build.VERSION.SDK_INT < 33) return
+    if (Build.VERSION.SDK_INT < 33 || io.github.orth4x0r.venty.ui.theme.LocalDarkMode.current) return
     val strength by animateFloatAsState(level, tween(1600), label = "auraLevel")
     val tint by animateColorAsState(color, tween(1200), label = "auraTint")
     if (strength < 0.01f) return

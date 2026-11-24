@@ -1,5 +1,6 @@
 package io.github.orth4x0r.venty.ble
 
+import kotlin.math.roundToInt
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
@@ -11,7 +12,7 @@ import android.os.ParcelUuid
 import android.os.SystemClock
 import android.util.Log
 import io.github.orth4x0r.venty.session.RampPhase
-import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.session.RampCurve
 import io.github.orth4x0r.venty.session.RampRun
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -104,6 +105,7 @@ class VentyController(context: Context) {
 
     private fun logLink(text: String) {
         Log.i(TAG, "link: $text")
+        DiagLog.log("link $text")
         _linkEvents.update { (listOf(LinkEvent(System.currentTimeMillis(), text)) + it).take(MAX_LINK_EVENTS) }
     }
 
@@ -473,8 +475,10 @@ class VentyController(context: Context) {
     }
 
     private fun onPacket(data: ByteArray) {
-        VentyProtocol.parseStatus(data)?.let { s ->
+        VentyProtocol.parseStatus(data)?.let { parsed ->
             lastStatusAt = SystemClock.elapsedRealtime()
+            lastStatusRaw = data
+            val s = parsed.withBase(normalTarget)
             if (s.heaterMode != deviceStatus?.heaterMode) Log.i(TAG, "mode ${s.heaterMode}: ${data.toHex()}")
             if (s.heaterMode == HeaterMode.On || s.heaterMode == HeaterMode.Off) normalTarget = s.targetTenths
             deviceStatus = s
@@ -518,7 +522,7 @@ class VentyController(context: Context) {
 
         pendingTarget?.let { (value, at) ->
             if (device.targetTenths == value || now - at > PENDING_HOLD_MS) pendingTarget = null
-            else shown = shown.copy(targetTenths = value)
+            else shown = shown.copy(targetTenths = value, reportedTargetTenths = null)
         }
         pendingHeater?.let { (mode, at) ->
             when {
@@ -529,16 +533,16 @@ class VentyController(context: Context) {
                         _notices.tryEmit("The Venty didn't accept ${if (mode == HeaterMode.Boost) "boost" else "superboost"}")
                     }
                 }
-                else -> shown = shown.copy(heaterMode = mode)
+                else -> shown = shown.copy(heaterMode = mode, reportedTargetTenths = null)
             }
         }
         pendingBoost?.let { (value, at) ->
             if (device.boostOffset == value || now - at > PENDING_HOLD_MS) pendingBoost = null
-            else shown = shown.copy(boostOffset = value)
+            else shown = shown.copy(boostOffset = value, reportedTargetTenths = null)
         }
         pendingSuperBoost?.let { (value, at) ->
             if (device.superBoostOffset == value || now - at > PENDING_HOLD_MS) pendingSuperBoost = null
-            else shown = shown.copy(superBoostOffset = value)
+            else shown = shown.copy(superBoostOffset = value, reportedTargetTenths = null)
         }
         for ((bit, pending) in pendingFlags) {
             val (value, at) = pending
@@ -546,6 +550,39 @@ class VentyController(context: Context) {
             else shown = shown.withFlag(bit, value)
         }
         _status.value = shown
+        logStatusDiag(device, shown)
+    }
+
+    /** The last status packet as received, for the diagnostics log. */
+    @Volatile private var lastStatusRaw: ByteArray? = null
+    private var lastDiagKey: String? = null
+
+    /**
+     * Logs the device's status beside what the app shows, whenever either changes. Battery and the
+     * auto-off countdown are left out of the comparison, or every poll would be a new line.
+     */
+    private fun logStatusDiag(device: VentyStatus, shown: VentyStatus) {
+        val u = if (device.fahrenheit) "F" else "C"
+        fun t(tenths: Int) = "%.1fC/%dF".format(tenths / 10.0, (tenths * 9 / 50.0 + 32).roundToInt())
+        val dev = "dev mode=${device.heaterMode} reported=${t(device.reportedTargetTenths ?: device.targetTenths)} " +
+            "base=${t(device.targetTenths)} boost=+${device.boostOffset}C super=+${device.superBoostOffset}C " +
+            "live=${device.currentTenths?.let(::t) ?: "none"} reached=${device.setpointReached} unit=$u"
+        val uncapped = shown.uncappedTargetFor(shown.heaterMode)
+        val dial = shown.effectiveTargetTenths
+        val pending = listOfNotNull(
+            pendingTarget?.let { "target=${t(it.first)}" },
+            pendingHeater?.let { "mode=${it.first}" },
+            pendingBoost?.let { "boost=+${it.first}C" },
+            pendingSuperBoost?.let { "super=+${it.first}C" },
+        )
+        val app = "app mode=${shown.heaterMode} dial=${t(dial)}" +
+            (if (uncapped > dial) " capped(wanted ${t(uncapped)})" else "") +
+            (if (pending.isNotEmpty()) " pending[${pending.joinToString(" ")}]" else "") +
+            (_ramp.value?.let { " ramp=${t(it.targetTenths)}" } ?: "")
+        val key = "$dev | $app"
+        if (key == lastDiagKey) return
+        lastDiagKey = key
+        DiagLog.log("$key | raw ${lastStatusRaw?.toHex() ?: "-"}")
     }
 
     private fun VentyStatus.flag(bit: Int) = when (bit) {
@@ -644,16 +681,16 @@ class VentyController(context: Context) {
     // ---- Ramp -----------------------------------------------------------------------------
 
     /**
-     * Turns the heater on at the plan's start temperature and steps the target up on schedule,
+     * Turns the heater on at the ramp's first temperature and moves the target on schedule,
      * then holds and turns the heater off. Keeps going through a dropped link, re-sending the
      * target once it's back. Stops early if the heater is turned off or the target is changed.
      */
-    fun startRamp(plan: RampPlan) {
+    fun startRamp(plan: RampCurve) {
         val kind = _kind.value
-        val p = plan.fitTo(kind.minTarget / 10, kind.maxTarget / 10)
+        val p = plan.fitToRange(kind.minTarget, kind.maxTarget)
         rampJob?.cancel()
         val id = ++rampId
-        _ramp.value = RampRun(p, 0L, p.phaseAt(0L), p.targetAt(0L))
+        _ramp.value = RampRun(p, 0L, p.phaseAt(0L), p.tenthsAt(0L))
         rampJob = scope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             var sentTarget = -1
@@ -672,12 +709,12 @@ class VentyController(context: Context) {
                         _notices.tryEmit("Ramp finished, heater off")
                         break
                     }
-                    val target = p.targetAt(elapsed)
+                    val target = p.tenthsAt(elapsed)
                     _ramp.value = RampRun(p, elapsed, phase, target)
                     if (target != sentTarget || linkGeneration != sentGeneration) {
                         sentTarget = target
                         sentGeneration = linkGeneration
-                        writeRampTarget(target * 10)
+                        writeRampTarget(target)
                         if (!heaterRequested && deviceStatus?.heaterMode?.isHeating != true) {
                             heaterRequested = true
                             pendingHeater = HeaterMode.On to SystemClock.elapsedRealtime()
@@ -788,6 +825,8 @@ class VentyController(context: Context) {
 
     private suspend fun sendSafely(packet: ByteArray) {
         val l = link ?: return
+        // Byte 1 is the write mask; polls and plain reads leave it at 0.
+        if (packet.size > 1 && packet[1] != 0.toByte()) DiagLog.log("tx ${packet.toHex()}")
         try {
             l.send(packet)
         } catch (e: Exception) {

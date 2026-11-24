@@ -52,6 +52,7 @@ import kotlin.random.Random
  */
 @Composable
 fun LavaLayer(level: Float, color: Color, modifier: Modifier = Modifier) {
+    if (io.github.orth4x0r.venty.ui.theme.LocalDarkMode.current) return
     val strength by animateFloatAsState(level, tween(1400), label = "lavaLevel")
     // Hold the last boost colour while the lava drains away, so dropping out of boost doesn't
     // turn it green or blue on the way out, and blend between boost and superboost.

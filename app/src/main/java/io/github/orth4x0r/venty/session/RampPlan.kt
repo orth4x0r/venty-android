@@ -1,9 +1,10 @@
 package io.github.orth4x0r.venty.session
 
 /**
- * A temperature ramp: the heater starts at [startC], climbs [stepC] every [stepEveryMs] until it
- * reaches [peakC], holds there for [holdMs], and then turns off. The defaults climb from 180 °C to
- * 200 °C over ten minutes and hold for three.
+ * A steady climb, as the Simple and Steps editors set it up: the heater starts at [startC], climbs
+ * [stepC] every [stepEveryMs] until it reaches [peakC], holds there for [holdMs], and then turns
+ * off. The defaults climb from 180 °C to 200 °C over ten minutes and hold for three. Every ramp
+ * runs and is stored as a [RampCurve]; [toCurve] and [fromCurve] convert exactly.
  */
 data class RampPlan(
     val startC: Int = 180,
@@ -36,6 +37,18 @@ data class RampPlan(
         RampPhase.Holding -> totalMs - elapsedMs
         RampPhase.Done -> 0L
     }
+
+    /**
+     * The same ramp as a [RampCurve] in °C, step for step: the start, one point at the peak
+     * reached in [stepC] steps, and the hold.
+     */
+    fun toCurve(): RampCurve = RampCurve(
+        points = buildList {
+            add(RampPoint(0L, startC))
+            if (steps > 0) add(RampPoint(rampMs, peakC, RampMove.Climb, step = stepC))
+        },
+        endMs = totalMs,
+    )
 
     /** Fits the plan to a device's range (whole °C) and to sane step, interval and hold values. */
     fun fitTo(minC: Int, maxC: Int): RampPlan {
@@ -85,17 +98,41 @@ data class RampPlan(
             )
         }
 
+        /**
+         * Reads a curve back as a plan, for the Simple and Steps editors: one steady climb in °C,
+         * or a flat hold. Null for anything else, which only the ramp creator can edit.
+         */
+        fun fromCurve(c: RampCurve): RampPlan? {
+            if (c.fahrenheit) return null
+            val p = c.points
+            return when {
+                p.size == 1 -> RampPlan(startC = p[0].temp, peakC = p[0].temp, holdMs = c.endMs)
+                p.size == 2 && p[1].move == RampMove.Climb && p[1].temp > p[0].temp && p[1].step in MIN_STEP_C..MAX_STEP_C -> {
+                    val steps = ceilDiv(p[1].temp - p[0].temp, p[1].step)
+                    if (p[1].atMs % steps != 0L) return null
+                    RampPlan(
+                        startC = p[0].temp,
+                        stepC = p[1].step,
+                        stepEveryMs = p[1].atMs / steps,
+                        peakC = p[1].temp,
+                        holdMs = c.endMs - p[1].atMs,
+                    )
+                }
+                else -> null
+            }
+        }
+
         private fun ceilDiv(a: Int, b: Int) = (a + b - 1) / b
     }
 }
 
 /** A named ramp the user can start again with one tap. */
-data class RampProfile(val name: String, val plan: RampPlan) {
+data class RampProfile(val name: String, val plan: RampCurve) {
     companion object {
         val DEFAULTS = listOf(
-            RampProfile("Classic climb", RampPlan()),
-            RampProfile("Flavor chase", RampPlan(startC = 170, stepC = 2, peakC = 190, holdMs = 2 * 60_000L)),
-            RampProfile("Cloud finish", RampPlan(startC = 190, stepC = 4, peakC = 210, holdMs = 2 * 60_000L)),
+            RampProfile("Classic climb", RampPlan().toCurve()),
+            RampProfile("Flavor chase", RampPlan(startC = 170, stepC = 2, peakC = 190, holdMs = 2 * 60_000L).toCurve()),
+            RampProfile("Cloud finish", RampPlan(startC = 190, stepC = 4, peakC = 210, holdMs = 2 * 60_000L).toCurve()),
         )
     }
 }
@@ -103,4 +140,4 @@ data class RampProfile(val name: String, val plan: RampPlan) {
 enum class RampPhase { Ramping, Holding, Done }
 
 /** A ramp in progress, as the dashboard shows it. */
-data class RampRun(val plan: RampPlan, val elapsedMs: Long, val phase: RampPhase, val targetC: Int)
+data class RampRun(val plan: RampCurve, val elapsedMs: Long, val phase: RampPhase, val targetTenths: Int)

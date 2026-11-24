@@ -1,5 +1,6 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
+import io.github.orth4x0r.venty.ui.theme.LocalDarkMode
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.os.Build
@@ -15,7 +16,9 @@ import androidx.compose.ui.platform.LocalContext
 import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.prefs.BatterySample
 import io.github.orth4x0r.venty.prefs.Preset
+import io.github.orth4x0r.venty.session.RampCurve
 import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.ui.ramp.RampCreatorScreen
 import io.github.orth4x0r.venty.session.RampProfile
 import io.github.orth4x0r.venty.session.RampRun
 import io.github.orth4x0r.venty.session.BatteryForecast
@@ -191,7 +194,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class Page {
-    Main, Settings, History, FindMy, Wrapped;
+    Main, Settings, History, FindMy, Wrapped, RampCreator;
 
     /** Where back goes: the radar returns to Settings and the recap to History. */
     val parent: Page get() = when (this) {
@@ -281,6 +284,20 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
             }
             throw cancelled
         }
+    }
+
+    // What the ramp creator opens with: the curve, its name, and the saved ramp it would replace.
+    var creatorSeed by remember { mutableStateOf<CreatorSeed?>(null) }
+    fun seedCreator(new: Boolean = false): CreatorSeed {
+        // A new ramp starts as the classic climb in the device's unit, saved under a new name.
+        if (new) return CreatorSeed(
+            RampPlan().toCurve().inUnit(status?.fahrenheit == true),
+            nextProfileName(rampProfiles),
+            null,
+        )
+        // Opens in the ramp's own unit; the creator has a °F/°C switch.
+        val match = rampProfiles.firstOrNull { it.plan == rampPlan }
+        return CreatorSeed(rampPlan, match?.name ?: nextProfileName(rampProfiles), match)
     }
 
     var notice by remember { mutableStateOf<String?>(null) }
@@ -417,6 +434,30 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             readRssi = controller::readRssi,
                             onBack = { closePage() },
                         )
+                        Page.RampCreator -> {
+                            val seed = creatorSeed ?: remember { seedCreator() }
+                            RampCreatorScreen(
+                                initial = seed.curve,
+                                initialName = seed.name,
+                                replacing = seed.original != null,
+                                canSaveNew = !app.prefs.rampProfilesFull,
+                                kind = kind,
+                                fahrenheit = status?.fahrenheit == true,
+                                onUse = { c ->
+                                    app.prefs.setRamp(c)
+                                    closePage()
+                                    showNotice("Ramp ready, start it from the ramp card")
+                                },
+                                onSave = { n, c ->
+                                    val profile = RampProfile(n.ifBlank { seed.name }, c)
+                                    seed.original?.let { app.prefs.replaceRampProfile(it, profile) } ?: app.prefs.addRampProfile(profile)
+                                    app.prefs.setRamp(c)
+                                    closePage()
+                                    showNotice("Saved ${profile.name}")
+                                },
+                                onBack = { closePage() },
+                            )
+                        }
                         Page.Wrapped -> WrappedScreen(
                             history = history,
                             fahrenheit = status?.fahrenheit == true,
@@ -491,6 +532,10 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                     ramp = ramp,
                                     rampPlan = rampPlan,
                                     onRampPlan = app.prefs::setRamp,
+                                    onOpenRampCreator = { new ->
+                                        creatorSeed = seedCreator(new)
+                                        openPage(Page.RampCreator)
+                                    },
                                     onStartRamp = { controller.startRamp(rampPlan) },
                                     onStopRamp = { controller.stopRamp() },
                                     rampProfiles = rampProfiles,
@@ -523,7 +568,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                     }
                     // The status bar picks up the heater's colour on the main page, fading down
                     // into the content so it reads as light spilling from the top.
-                    if (target == Page.Main) StatusBarGlow { phaseColor }
+                    if (target == Page.Main && !LocalDarkMode.current) StatusBarGlow { phaseColor }
                 }
             }
         }
@@ -654,8 +699,9 @@ private fun Dashboard(
     onBoost: (Int) -> Unit,
     onSuperBoost: (Int) -> Unit,
     ramp: RampRun?,
-    rampPlan: RampPlan,
-    onRampPlan: (RampPlan) -> Unit,
+    rampPlan: RampCurve,
+    onRampPlan: (RampCurve) -> Unit,
+    onOpenRampCreator: (new: Boolean) -> Unit,
     onStartRamp: () -> Unit,
     onStopRamp: () -> Unit,
     rampProfiles: List<RampProfile>,
@@ -838,6 +884,7 @@ private fun Dashboard(
             profiles = rampProfiles,
             onSaveProfile = onSaveRampProfile,
             onRemoveProfile = onRemoveRampProfile,
+            onOpenCreator = onOpenRampCreator,
         )
     }
     // Set-and-forget things live below the controls, under their own heading.
@@ -898,7 +945,9 @@ private fun PresetsRow(
 ) {
     val view = LocalView.current
     val f = s.fahrenheit
-    val breathe by rememberInfiniteTransition(label = "presetGlow").animateFloat(
+    // Dark mode drops the glow, its breathing and the pop-in; chips still fade and glide.
+    val dark = LocalDarkMode.current
+    val breathe = if (dark) null else rememberInfiniteTransition(label = "presetGlow").animateFloat(
         initialValue = 0.7f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
@@ -926,7 +975,7 @@ private fun PresetsRow(
             val bg by animateColorAsState(if (selected) accent.copy(alpha = 0.22f) else VentyColors.Surface, label = "presetBg")
             val border by animateColorAsState(if (selected) accent else Color.White.copy(alpha = 0.08f), label = "presetBorder")
             val glow by animateFloatAsState(if (selected) 1f else 0f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessLow), label = "presetGlow")
-            val pop = remember { Animatable(if (id in popped) 1f else 0.6f) }
+            val pop = remember { Animatable(if (dark || id in popped) 1f else 0.6f) }
             LaunchedEffect(Unit) {
                 if (popped.add(id)) pop.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow))
             }
@@ -943,11 +992,11 @@ private fun PresetsRow(
                     .pressScale(interaction, 0.93f)
                     .drawBehind {
                         val g = glow
-                        if (g > 0.01f) {
+                        if (g > 0.01f && !dark) {
                             val spread = 10.dp.toPx()
                             drawRoundRect(
                                 Brush.radialGradient(
-                                    listOf(accent.copy(alpha = 0.5f * g * breathe), Color.Transparent),
+                                    listOf(accent.copy(alpha = 0.5f * g * (breathe?.value ?: 1f)), Color.Transparent),
                                     center = center,
                                     radius = size.maxDimension * 0.75f,
                                 ),
@@ -1167,7 +1216,7 @@ private fun SessionPips(filled: Int, total: Int, color: Color) {
                 spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
                 label = "pipScale",
             )
-            val pulse = if (filled == 1 && i == lastLit) {
+            val pulse = if (filled == 1 && i == lastLit && !LocalDarkMode.current) {
                 rememberInfiniteTransition(label = "pipPulse").animateFloat(
                     initialValue = 1f,
                     targetValue = 0.35f,
@@ -1195,6 +1244,10 @@ private fun SessionPips(filled: Int, total: Int, color: Color) {
 /** A small bolt that throbs with a soft glow while the battery charges. */
 @Composable
 private fun ChargingBolt() {
+    if (LocalDarkMode.current) {
+        Icon(Icons.Rounded.Bolt, contentDescription = null, tint = VentyColors.Ready, modifier = Modifier.size(14.dp))
+        return
+    }
     val beat by rememberInfiniteTransition(label = "bolt").animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -1227,8 +1280,9 @@ private class Bubble(val x: Float, val speed: Float, val phase: Float, val radiu
  * rising through it. One reused Path; the gradients are rebuilt only when the size changes.
  */
 private fun Modifier.chargeLiquid(level: () -> Float): Modifier = composed {
-    val t = rememberInfiniteTransition(label = "liquid")
-    val roll by t.animateFloat(
+    // In dark mode the level still shows, as a still surface with no bubbles.
+    val dark = LocalDarkMode.current
+    val rollState = if (dark) null else rememberInfiniteTransition(label = "liquid").animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(3200, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
@@ -1255,6 +1309,7 @@ private fun Modifier.chargeLiquid(level: () -> Float): Modifier = composed {
             val lv = level().coerceIn(0f, 1f)
             // At 0 % the whole wave sits just under the bottom edge, so it drains away fully.
             val top = h * (1f - lv) + amp * (1f - lv)
+            val roll = rollState?.value ?: 0f
             val a = roll * twoPi
 
             // One wave layer: the surface plus, when [close], the body down to the bottom edge.
@@ -1285,7 +1340,7 @@ private fun Modifier.chargeLiquid(level: () -> Float): Modifier = composed {
 
             // Bubbles rise from the bottom and fade out as they reach the surface.
             val depth = h - top
-            if (depth > 8.dp.toPx()) {
+            if (depth > 8.dp.toPx() && !dark) {
                 for (b in bubbles) {
                     val p = (roll * b.speed + b.phase) % 1f
                     val y = h - depth * p
@@ -1332,14 +1387,16 @@ private fun Sparkline(samples: List<BatterySample>, color: Color, modifier: Modi
 @Composable
 private fun StatusPill(phase: HeaterPhase, s: VentyStatus) {
     val color by animateColorAsState(phase.color, label = "pill")
+    // How far above the base the heater is aiming, in the display unit (less than the offsets
+    // when the 210 °C limit cuts them short).
+    val lift = Temperature.toDisplay(s.effectiveTargetTenths, s.fahrenheit) - Temperature.toDisplay(s.targetTenths, s.fahrenheit)
     val extra = when (phase) {
-        HeaterPhase.Boost -> " +${s.boostOffset}°"
-        HeaterPhase.SuperBoost -> " +${s.boostOffset + s.superBoostOffset}°"
+        HeaterPhase.Boost, HeaterPhase.SuperBoost -> " +$lift°"
         else -> ""
     }
     // While ready, the dot sends out a slow ping and a band of light crosses the pill now and
     // then: alive, but quiet enough to sit through a whole session.
-    val shine = if (phase == HeaterPhase.Ready) {
+    val shine = if (phase == HeaterPhase.Ready && !LocalDarkMode.current) {
         rememberInfiniteTransition(label = "readyShine").animateFloat(
             initialValue = 0f,
             targetValue = 1f,
@@ -1576,7 +1633,7 @@ private fun HeaterButton(on: Boolean, accent: Color, onToggle: (Offset) -> Unit)
     val iconTurn by animateFloatAsState(if (on) 180f else 0f, spring(dampingRatio = 0.6f), label = "iconTurn")
     val shape = VentyShapes.Large
     // While it's the call to start, a band of light crosses it every few seconds.
-    val sheen = if (!on) {
+    val sheen = if (!on && !LocalDarkMode.current) {
         rememberInfiniteTransition(label = "heaterSheen").animateFloat(
             initialValue = 0f,
             targetValue = 1f,
@@ -1674,9 +1731,10 @@ private fun DeviceCard(
 ) {
     Card {
         if (kind.hasBoost) {
-            OffsetRow("Boost", s.boostOffset, VentyColors.Boost, onBoost)
+            // The Venty keeps both offsets in °C, whatever unit it displays.
+            OffsetRow("Boost", s.boostOffset, VentyColors.Boost, onBoost, hint = if (s.fahrenheit) "in °C" else null)
             Spacer(Modifier.height(8.dp))
-            OffsetRow("Superboost", s.superBoostOffset, VentyColors.SuperBoost, onSuperBoost, hint = "on top of boost")
+            OffsetRow("Superboost", s.superBoostOffset, VentyColors.SuperBoost, onSuperBoost, hint = if (s.fahrenheit) "on top of boost, in °C" else "on top of boost")
             Spacer(
                 Modifier
                     .padding(vertical = 16.dp)
@@ -1743,7 +1801,7 @@ private fun TopBar(
         // instead of a word, which left no room for the tag beside the battery and three icons.
         val tag = name.removePrefix("S&B").trim().takeIf { it.isNotEmpty() && it != kind.displayName }
         val connected = status != null
-        val dotAlpha = if (connected || demo) {
+        val dotAlpha = if (connected || demo || LocalDarkMode.current) {
             1f
         } else {
             val breathe by rememberInfiniteTransition(label = "connectDot").animateFloat(
@@ -1786,7 +1844,7 @@ private fun TopBar(
                 Icon(Icons.Rounded.Settings, if (updateAvailable) "Settings, update available" else "Settings")
                 // A glowing dot while a new version waits in Settings.
                 if (updateAvailable) {
-                    val glow by rememberInfiniteTransition(label = "updateDot").animateFloat(
+                    val glow = if (LocalDarkMode.current) null else rememberInfiniteTransition(label = "updateDot").animateFloat(
                         initialValue = 0.55f,
                         targetValue = 1f,
                         animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
@@ -1796,7 +1854,10 @@ private fun TopBar(
                         Modifier
                             .align(Alignment.TopEnd)
                             .size(8.dp)
-                            .graphicsLayer { alpha = glow; scaleX = 0.8f + 0.2f * glow; scaleY = 0.8f + 0.2f * glow }
+                            .graphicsLayer {
+                                val g = glow?.value ?: 1f
+                                alpha = g; scaleX = 0.8f + 0.2f * g; scaleY = 0.8f + 0.2f * g
+                            }
                             .clip(CircleShape)
                             .background(VentyColors.Heat),
                     )
@@ -1904,3 +1965,5 @@ internal fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit
 /** "45 min" under an hour and a half, "2 h 10 min" from there, so short spans don't read "0 h 53 m". */
 private fun hoursAndMinutes(minutes: Int): String =
     if (minutes < 90) "$minutes min" else "${minutes / 60} h ${minutes % 60} min"
+
+private data class CreatorSeed(val curve: RampCurve, val name: String, val original: RampProfile?)

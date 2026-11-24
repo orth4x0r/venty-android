@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val prefs by app.prefs.app.collectAsStateWithLifecycle()
             val deviceColor by app.prefs.deviceColor.collectAsStateWithLifecycle()
-            VentyTheme(dynamicColor = prefs.dynamicColor, accent = prefs.accent, deviceColor = deviceColor) {
+            VentyTheme(dynamicColor = prefs.dynamicColor, accent = prefs.accent, deviceColor = deviceColor, darkMode = prefs.darkMode) {
                 VentyRoot(controller)
             }
         }

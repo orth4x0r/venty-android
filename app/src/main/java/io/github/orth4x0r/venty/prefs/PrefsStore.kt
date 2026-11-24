@@ -1,7 +1,10 @@
 package io.github.orth4x0r.venty.prefs
 
 import android.content.Context
+import io.github.orth4x0r.venty.session.RampCurve
+import io.github.orth4x0r.venty.session.RampMove
 import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.session.RampPoint
 import io.github.orth4x0r.venty.session.RampProfile
 import io.github.orth4x0r.venty.ble.DeviceColor
 import io.github.orth4x0r.venty.ui.settings.AppPrefs
@@ -27,26 +30,30 @@ class PrefsStore(context: Context) {
 
     private val _ramp = MutableStateFlow(loadRamp())
     /** The last ramp the user set up, used for the next one. */
-    val ramp: StateFlow<RampPlan> = _ramp.asStateFlow()
+    val ramp: StateFlow<RampCurve> = _ramp.asStateFlow()
 
-    fun setRamp(plan: RampPlan) {
-        _ramp.value = plan
-        sp.edit()
-            .putInt("ramp_start", plan.startC)
-            .putInt("ramp_step", plan.stepC)
-            .putLong("ramp_every", plan.stepEveryMs)
-            .putInt("ramp_peak", plan.peakC)
-            .putLong("ramp_hold", plan.holdMs)
-            .apply()
+    fun setRamp(ramp: RampCurve) {
+        _ramp.value = ramp
+        sp.edit().putString("ramp_curve", curveJson(ramp).toString()).apply()
     }
 
     private val _rampProfiles = MutableStateFlow(loadRampProfiles())
     /** Saved ramps, shown as chips on the ramp card. */
     val rampProfiles: StateFlow<List<RampProfile>> = _rampProfiles.asStateFlow()
 
+    /** True when there's no room for another saved ramp. */
+    val rampProfilesFull: Boolean get() = _rampProfiles.value.size >= MAX_RAMP_PROFILES
+
     fun addRampProfile(profile: RampProfile) = saveRampProfiles((_rampProfiles.value + profile).takeLast(MAX_RAMP_PROFILES))
 
     fun removeRampProfile(profile: RampProfile) = saveRampProfiles(_rampProfiles.value - profile)
+
+    /** Swaps [old] for [new] in the same place, or adds [new] if [old] is gone. */
+    fun replaceRampProfile(old: RampProfile, new: RampProfile) {
+        val list = _rampProfiles.value
+        val at = list.indexOf(old)
+        if (at < 0) addRampProfile(new) else saveRampProfiles(list.toMutableList().apply { set(at, new) })
+    }
 
     /** Puts [profile] back at [index], for undo. */
     fun insertRampProfile(index: Int, profile: RampProfile) {
@@ -61,16 +68,15 @@ class PrefsStore(context: Context) {
             val arr = JSONArray(raw)
             List(arr.length()) { i ->
                 val o = arr.getJSONObject(i)
-                RampProfile(
-                    o.getString("name"),
-                    RampPlan(
-                        startC = o.getInt("start"),
-                        stepC = o.getInt("step"),
-                        stepEveryMs = o.getLong("every"),
-                        peakC = o.getInt("peak"),
-                        holdMs = o.getLong("hold"),
-                    ),
-                )
+                // Saved before every ramp became a curve: start, step, every, peak, hold.
+                val ramp = o.optJSONObject("curve")?.let(::parseCurve) ?: RampPlan(
+                    startC = o.getInt("start"),
+                    stepC = o.getInt("step"),
+                    stepEveryMs = o.getLong("every"),
+                    peakC = o.getInt("peak"),
+                    holdMs = o.getLong("hold"),
+                ).toCurve()
+                RampProfile(o.getString("name"), ramp)
             }
         }.getOrDefault(RampProfile.DEFAULTS)
     }
@@ -79,20 +85,15 @@ class PrefsStore(context: Context) {
         _rampProfiles.value = list
         val arr = JSONArray()
         list.forEach {
-            arr.put(
-                JSONObject()
-                    .put("name", it.name)
-                    .put("start", it.plan.startC)
-                    .put("step", it.plan.stepC)
-                    .put("every", it.plan.stepEveryMs)
-                    .put("peak", it.plan.peakC)
-                    .put("hold", it.plan.holdMs),
-            )
+            arr.put(JSONObject().put("name", it.name).put("curve", curveJson(it.plan)))
         }
         sp.edit().putString("ramp_profiles", arr.toString()).apply()
     }
 
-    private fun loadRamp(): RampPlan {
+    private fun loadRamp(): RampCurve {
+        sp.getString("ramp_curve", null)?.let { raw ->
+            runCatching { parseCurve(JSONObject(raw)) }.getOrNull()?.let { return it }
+        }
         val d = RampPlan()
         return RampPlan(
             startC = sp.getInt("ramp_start", d.startC),
@@ -100,7 +101,31 @@ class PrefsStore(context: Context) {
             stepEveryMs = sp.getLong("ramp_every", d.stepEveryMs),
             peakC = sp.getInt("ramp_peak", d.peakC),
             holdMs = sp.getLong("ramp_hold", d.holdMs),
-        )
+        ).toCurve()
+    }
+
+    private fun curveJson(c: RampCurve): JSONObject {
+        val pts = JSONArray()
+        c.points.forEach { pts.put(JSONObject().put("t", it.atMs).put("d", it.temp).put("m", it.move.name).put("s", it.step)) }
+        return JSONObject().put("points", pts).put("end", c.endMs).put("f", c.fahrenheit)
+    }
+
+    private fun parseCurve(o: JSONObject): RampCurve {
+        val pts = o.getJSONArray("points")
+        return RampCurve(
+            List(pts.length()) { i ->
+                val p = pts.getJSONObject(i)
+                RampPoint(
+                    atMs = p.getLong("t"),
+                    // "c" is whole °C, from before curves kept their unit.
+                    temp = if (p.has("d")) p.getInt("d") else p.getInt("c"),
+                    move = RampMove.entries.firstOrNull { it.name == p.optString("m") } ?: RampMove.Jump,
+                    step = p.optInt("s", 1),
+                )
+            },
+            endMs = o.getLong("end"),
+            fahrenheit = o.optBoolean("f", false),
+        ).normalized()
     }
 
     fun setApp(prefs: AppPrefs) {
@@ -116,6 +141,7 @@ class PrefsStore(context: Context) {
             .putBoolean("heat_haptics", prefs.heatHaptics)
             .putBoolean("check_updates", prefs.checkUpdates)
             .putInt("idle_disconnect_min", prefs.idleDisconnectMinutes)
+            .putBoolean("dark_mode", prefs.darkMode)
             .apply()
     }
 
@@ -143,6 +169,7 @@ class PrefsStore(context: Context) {
         checkUpdates = sp.getBoolean("check_updates", true),
         idleDisconnectMinutes = sp.getInt("idle_disconnect_min", AppPrefs.DEFAULT_IDLE_DISCONNECT_MIN)
             .takeIf { it in AppPrefs.IDLE_DISCONNECT_STEPS } ?: AppPrefs.DEFAULT_IDLE_DISCONNECT_MIN,
+        darkMode = sp.getBoolean("dark_mode", true),
     )
 
     private val _deviceColor = MutableStateFlow(

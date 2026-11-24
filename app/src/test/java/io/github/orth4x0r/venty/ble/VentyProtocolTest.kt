@@ -99,24 +99,48 @@ class VentyProtocolTest {
     }
 
     @Test
-    fun `effective target adds boost offsets`() {
-        val base = VentyProtocol.parseStatus(padded(0x01, 0, 0, 0x80, 0x3A, 0x07, 15, 10))!!
+    fun `predicted boost targets add the offsets in celsius`() {
+        val base = VentyProtocol.parseStatus(padded(0x01, 0, 0, 0x80, 0x3A, 0x07, 15, 10))!!.copy(reportedTargetTenths = null)
         assertEquals(1850, base.copy(heaterMode = HeaterMode.On).effectiveTargetTenths)
         assertEquals(2000, base.copy(heaterMode = HeaterMode.Boost).effectiveTargetTenths)
         assertEquals(2100, base.copy(heaterMode = HeaterMode.SuperBoost).effectiveTargetTenths)
         // Capped at the Venty's 210 °C maximum.
         assertEquals(2100, base.copy(targetTenths = 2000, heaterMode = HeaterMode.Boost).effectiveTargetTenths)
+        // Still °C on a Venty set to °F.
+        assertEquals(2000, base.copy(heaterMode = HeaterMode.Boost, fahrenheit = true).effectiveTargetTenths)
+    }
+
+    // Captured from a real Venty (firmware V01.11, set to °F, boost +15, superboost +13) at a
+    // 190 °C (374 °F) base, switching between normal, boost and superboost on the device.
+    private val normal = hex("01 00 00 80 6C 07 0F 0D 4A 77 00 01 00 00 D3 00")
+    private val boost = hex("01 00 00 80 02 08 0F 0D 4A 77 00 02 00 00 D3 00")
+    private val superBoost = hex("01 00 00 80 34 08 0F 0D 4A 77 00 03 00 00 D3 00")
+
+    @Test
+    fun `the venty reports the boosted target while boosting`() {
+        val n = VentyProtocol.parseStatus(normal)!!.withBase(null)
+        assertEquals(1900, n.targetTenths)
+        assertEquals(1900, n.effectiveTargetTenths)
+
+        // 190 + 15 °C: the device shows 401 °F, and so should the app.
+        val b = VentyProtocol.parseStatus(boost)!!.withBase(n.targetTenths)
+        assertEquals(1900, b.targetTenths)
+        assertEquals(2050, b.effectiveTargetTenths)
+        assertEquals(401, io.github.orth4x0r.venty.ui.Temperature.toDisplay(b.effectiveTargetTenths, true))
+
+        // 190 + 15 + 13 = 218 °C, capped at 210: the base comes from the last normal reading.
+        val s = VentyProtocol.parseStatus(superBoost)!!.withBase(n.targetTenths)
+        assertEquals(1900, s.targetTenths)
+        assertEquals(2100, s.effectiveTargetTenths)
     }
 
     @Test
-    fun `boost offsets count in fahrenheit when the device is set to it`() {
-        // Reported on Reddit: 356 °F base with +30 °F boost showed 410 °F (30 read as °C) instead of 386 °F.
-        val base = VentyProtocol.parseStatus(padded(0x01, 0, 0, 0x80, 0x08, 0x07, 30, 30))!!.copy(fahrenheit = true)
-        assertEquals(1800, base.copy(heaterMode = HeaterMode.On).effectiveTargetTenths)
-        val boost = base.copy(heaterMode = HeaterMode.Boost).effectiveTargetTenths
-        assertEquals(386, io.github.orth4x0r.venty.ui.Temperature.toDisplay(boost, true))
-        // 356 + 60 °F is past the cap, so superboost shows the 410 °F maximum.
-        assertEquals(2100, base.copy(heaterMode = HeaterMode.SuperBoost).effectiveTargetTenths)
+    fun `base is worked out from the offsets when no normal reading is known`() {
+        assertEquals(1900, VentyProtocol.parseStatus(boost)!!.withBase(null).targetTenths)
+        // A stale normal target that doesn't add up is ignored.
+        assertEquals(1900, VentyProtocol.parseStatus(boost)!!.withBase(1800).targetTenths)
+        // Capped and nothing better known: the best guess is the report minus the offsets.
+        assertEquals(1820, VentyProtocol.parseStatus(superBoost)!!.withBase(null).targetTenths)
     }
 
     @Test
@@ -126,8 +150,14 @@ class VentyProtocolTest {
             battery = 55, autoOffSeconds = 300, heaterMode = HeaterMode.Boost,
             charging = false, fahrenheit = true, setpointReached = false,
         )
-        assertEquals(s, VentyProtocol.parseStatus(VentyProtocol.encodeStatus(s)))
+        // Encoded the way the device sends it, with the boosted target; the base comes back
+        // from the offsets.
+        val back = VentyProtocol.parseStatus(VentyProtocol.encodeStatus(s))!!
+        assertEquals(2020, back.reportedTargetTenths)
+        assertEquals(s, back.withBase(null).copy(reportedTargetTenths = null))
     }
+
+    private fun hex(s: String) = s.split(" ").map { it.toInt(16).toByte() }.toByteArray()
 
     @Test
     fun `parses firmware and usage`() {
@@ -202,7 +232,7 @@ class VentyProtocolTest {
             charging = true, fahrenheit = false, setpointReached = true,
             ecoChargeOptimization = true, ecoVoltageLimit = true, boostVisualization = true,
         )
-        assertEquals(s, VentyProtocol.parseStatus(VentyProtocol.encodeStatus(s)))
+        assertEquals(s, VentyProtocol.parseStatus(VentyProtocol.encodeStatus(s))?.copy(reportedTargetTenths = null))
         assertEquals(0x6A, VentyProtocol.encodeStatus(s).u8(14))
     }
 

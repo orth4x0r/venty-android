@@ -52,7 +52,9 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import io.github.orth4x0r.venty.ui.theme.LocalDarkMode
 import io.github.orth4x0r.venty.ui.theme.VentyColors
+import androidx.compose.foundation.background
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -67,6 +69,10 @@ import kotlin.random.Random
  */
 @Composable
 fun AmbientBackground(tint: Color, intensity: Float, modifier: Modifier = Modifier) {
+    if (LocalDarkMode.current) {
+        Spacer(modifier.fillMaxSize().background(VentyColors.Background))
+        return
+    }
     val color by animateColorAsState(tint, tween(1200), label = "ambientTint")
     val strength by animateFloatAsState(intensity, tween(1200), label = "ambientStrength")
     val t = rememberInfiniteTransition(label = "ambient")
@@ -128,6 +134,7 @@ fun Modifier.pressScale(interaction: MutableInteractionSource, pressedScale: Flo
  * never cuts a running entrance short.
  */
 fun Modifier.enterFromBelow(delayMs: Int, enabled: Boolean = true): Modifier = composed {
+    if (LocalDarkMode.current) return@composed Modifier
     val animate = remember { enabled }
     val progress = remember { Animatable(if (animate) 0f else 1f) }
     LaunchedEffect(Unit) {
@@ -200,6 +207,7 @@ private class Ember(var x: Float, var y: Float, var vy: Float, var life: Float, 
  */
 @Composable
 fun Embers(active: Boolean, color: Color, modifier: Modifier = Modifier, rate: Float = 1f) {
+    if (LocalDarkMode.current) return
     val embers = remember { ArrayList<Ember>() }
     var frameNanos by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     val lastNanos = remember { longArrayOf(0L) }
@@ -245,6 +253,7 @@ fun Embers(active: Boolean, color: Color, modifier: Modifier = Modifier, rate: F
  */
 @Composable
 fun ReadyBurst(trigger: Boolean, color: Color, modifier: Modifier = Modifier) {
+    if (LocalDarkMode.current) return
     val ring = remember { Animatable(1f) }
     val was = remember { booleanArrayOf(trigger) }
     LaunchedEffect(trigger) {
@@ -269,6 +278,7 @@ fun ReadyBurst(trigger: Boolean, color: Color, modifier: Modifier = Modifier) {
 /** A full-screen wash of [color] that flashes in and fades out whenever [key] changes. */
 @Composable
 fun ColorFlash(key: Any?, color: Color, modifier: Modifier = Modifier) {
+    if (LocalDarkMode.current) return
     val flash = remember { Animatable(0f) }
     val first = remember { BooleanArray(1) { true } }
     LaunchedEffect(key) {
@@ -321,6 +331,7 @@ private fun shockRadius(origin: Offset, w: Float, h: Float, p: Float): Float {
 
 @Composable
 fun ShockwaveRing(wave: Shockwave, modifier: Modifier = Modifier) {
+    if (LocalDarkMode.current) return
     Canvas(modifier.fillMaxSize()) {
         val p = wave.progress.value
         if (p >= 1f) return@Canvas
@@ -347,6 +358,7 @@ fun ShockwaveRing(wave: Shockwave, modifier: Modifier = Modifier) {
  * for AGSL; on older phones, or if the shader won't build, the ring plays on its own.
  */
 fun Modifier.shockwaveDistortion(wave: Shockwave): Modifier = composed {
+    if (LocalDarkMode.current) return@composed Modifier
     val shader = remember { if (Build.VERSION.SDK_INT >= 33) ShockShader.create() else null }
     if (shader == null) {
         this
@@ -413,7 +425,7 @@ private object ShockShader {
 /** A brush for text that slowly sweeps a highlight across [base] colours. */
 @Composable
 fun shimmerBrush(colors: List<Color>, enabled: Boolean): Brush? {
-    if (!enabled) return null
+    if (!enabled || LocalDarkMode.current) return null
     val x by rememberInfiniteTransition(label = "textShimmer").animateFloat(
         initialValue = -400f,
         targetValue = 800f,

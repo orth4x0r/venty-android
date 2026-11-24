@@ -1,5 +1,6 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
+import io.github.orth4x0r.venty.ui.theme.LocalDarkMode
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -86,6 +87,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.orth4x0r.venty.ble.DeviceKind
+import io.github.orth4x0r.venty.session.RampCurve
 import io.github.orth4x0r.venty.session.RampPhase
 import io.github.orth4x0r.venty.session.RampPlan
 import io.github.orth4x0r.venty.session.RampRun
@@ -99,26 +101,30 @@ import kotlin.math.roundToInt
 import androidx.compose.foundation.interaction.MutableInteractionSource
 
 /**
- * Ramp session: set up a climb, either simply (start, finish, bowl length, optional plateau) or
- * step by step (start, step, interval, peak, hold), then watch it run on a
- * staircase chart with a glowing marker, a "+2°" that floats up on every step, and a countdown.
+ * Ramp session: set up a climb, either simply (start, finish, bowl length, optional plateau),
+ * step by step (start, step, interval, peak, hold), or freehand in the ramp creator, then watch it
+ * run on a staircase chart with a glowing marker, a "+2°" that floats up on every step, and a
+ * countdown.
  */
 @Composable
 internal fun RampCard(
     run: RampRun?,
-    plan: RampPlan,
+    plan: RampCurve,
     kind: DeviceKind,
     fahrenheit: Boolean,
-    onPlan: (RampPlan) -> Unit,
+    onPlan: (RampCurve) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     profiles: List<RampProfile> = emptyList(),
     onSaveProfile: (RampProfile) -> Unit = {},
     onRemoveProfile: (RampProfile) -> Unit = {},
+    /** Opens the ramp creator: on the current ramp, or on a new one when the flag is set. */
+    onOpenCreator: (new: Boolean) -> Unit = {},
 ) {
     val shown = run?.plan ?: plan
     val running = run != null
-    val glow by rememberInfiniteTransition(label = "rampGlow").animateFloat(
+    // Breathes while a ramp runs; held still in dark mode.
+    val glow = if (LocalDarkMode.current) null else rememberInfiniteTransition(label = "rampGlow").animateFloat(
         initialValue = 0.35f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
@@ -129,7 +135,7 @@ internal fun RampCard(
         backdrop = if (!running) Modifier else Modifier.drawBehind {
             drawRect(
                 Brush.radialGradient(
-                    listOf(heat.copy(alpha = 0.16f * glow), Color.Transparent),
+                    listOf(heat.copy(alpha = 0.16f * (glow?.value ?: 0.6f)), Color.Transparent),
                     center = Offset(size.width * 0.85f, 0f),
                     radius = size.width * 0.8f,
                 ),
@@ -141,7 +147,7 @@ internal fun RampCard(
             Spacer(Modifier.width(8.dp))
             Text("Ramp session", style = MaterialTheme.typography.labelLarge, color = VentyColors.Muted, modifier = Modifier.weight(1f))
             if (run != null) {
-                PhaseChip(run.phase)
+                PhaseChip(run)
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -157,16 +163,19 @@ internal fun RampCard(
             if (r != null) {
                 RunningBody(r, fahrenheit, onStop)
             } else {
-                IdleBody(plan, kind, fahrenheit, onPlan, onStart, profiles, onSaveProfile, onRemoveProfile)
+                IdleBody(plan, kind, fahrenheit, onPlan, onStart, profiles, onSaveProfile, onRemoveProfile, onOpenCreator)
             }
         }
     }
 }
 
 @Composable
-private fun PhaseChip(phase: RampPhase) {
-    val (label, color) = when (phase) {
-        RampPhase.Ramping -> "Climbing" to VentyColors.Heat
+private fun PhaseChip(run: RampRun) {
+    // A hand-drawn ramp can come down as well as go up.
+    val cooling = run.phase == RampPhase.Ramping &&
+        run.plan.tenthsAt(run.elapsedMs + run.plan.nextChangeInMs(run.elapsedMs)) < run.targetTenths
+    val (label, color) = when (run.phase) {
+        RampPhase.Ramping -> if (cooling) "Cooling" to VentyColors.Cool else "Climbing" to VentyColors.Heat
         RampPhase.Holding -> "Holding" to VentyColors.Ember
         RampPhase.Done -> "Done" to VentyColors.Cool
     }
@@ -185,11 +194,12 @@ private fun PhaseChip(phase: RampPhase) {
 private fun RunningBody(run: RampRun, fahrenheit: Boolean, onStop: () -> Unit) {
     val p = run.plan
     val left = p.nextChangeInMs(run.elapsedMs)
+    val step = p.tenthsAt(run.elapsedMs + left) - run.targetTenths
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.Bottom) {
                 RollingNumber(
-                    Temperature.toDisplay(run.targetC * 10, fahrenheit),
+                    Temperature.toDisplay(run.targetTenths, fahrenheit),
                     MaterialTheme.typography.displaySmall,
                     MaterialTheme.colorScheme.onSurface,
                 )
@@ -203,7 +213,8 @@ private fun RunningBody(run: RampRun, fahrenheit: Boolean, onStop: () -> Unit) {
             }
             Text(
                 when (run.phase) {
-                    RampPhase.Ramping -> "Next +${delta(p.stepC, fahrenheit)}° in ${clock(left)}"
+                    RampPhase.Ramping -> if (step == 0) "Next change in ${clock(left)}"
+                        else "Next ${signedTenths(step, fahrenheit)}° in ${clock(left)}"
                     RampPhase.Holding -> "Heater off in ${clock(left)}"
                     RampPhase.Done -> "Turning the heater off"
                 },
@@ -222,20 +233,26 @@ private fun RunningBody(run: RampRun, fahrenheit: Boolean, onStop: () -> Unit) {
 
 @Composable
 private fun IdleBody(
-    plan: RampPlan,
+    current: RampCurve,
     kind: DeviceKind,
     fahrenheit: Boolean,
-    onPlan: (RampPlan) -> Unit,
+    onPlan: (RampCurve) -> Unit,
     onStart: () -> Unit,
     profiles: List<RampProfile>,
     onSaveProfile: (RampProfile) -> Unit,
     onRemoveProfile: (RampProfile) -> Unit,
+    onOpenCreator: (new: Boolean) -> Unit,
 ) {
+    // The +/- rows below edit a steady climb, read back from the curve; anything else (from the
+    // creator) is edited there.
+    val stepPlan = remember(current) { RampPlan.fromCurve(current) }
+    val plan = stepPlan ?: RampPlan()
+    val custom = stepPlan == null
     var editing by rememberSaveable { mutableStateOf(false) }
     var simple by rememberSaveable { mutableStateOf(true) }
     val minC = kind.minTarget / 10
     val maxC = kind.maxTarget / 10
-    fun change(p: RampPlan) = onPlan(p.fitTo(minC, maxC))
+    fun change(p: RampPlan) = onPlan(p.fitTo(minC, maxC).toCurve())
     // Simple mode reads the plan back as start, finish, bowl length and plateau, and rebuilds it
     // from those, so the steps are worked out for you.
     val bowlMs = roundTo30s(plan.totalMs)
@@ -245,35 +262,34 @@ private fun IdleBody(
         val f = finish.coerceIn(s, maxC)
         val t = total.coerceIn(RampPlan.MIN_SESSION_MS, RampPlan.MAX_SESSION_MS)
         val h = plateau.coerceIn(0L, minOf(RampPlan.MAX_HOLD_MS, t - 60_000L))
-        onPlan(RampPlan.span(s, f, t, h))
+        onPlan(RampPlan.span(s, f, t, h).toCurve())
     }
     Column {
         ProfileChips(
             profiles = profiles,
-            plan = plan,
-            onApply = { change(it.plan) },
-            onSave = { onSaveProfile(RampProfile(nextProfileName(profiles), plan)) },
+            plan = current,
+            onApply = { onPlan(it.plan.fitToRange(kind.minTarget, kind.maxTarget)) },
+            onSave = { onSaveProfile(RampProfile(nextProfileName(profiles), current)) },
             onRemove = onRemoveProfile,
         )
         Spacer(Modifier.height(8.dp))
         AnimatedContent(
-            targetState = if (simple) simpleSummary(plan, fahrenheit) else summary(plan, fahrenheit),
+            targetState = when {
+                custom -> curveSummary(current, fahrenheit)
+                simple -> simpleSummary(plan, fahrenheit)
+                else -> summary(plan, fahrenheit)
+            },
             transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(120)) },
             label = "rampSummary",
         ) { text ->
             Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         }
-        Text(
-            if (editing) "Done" else "Adjust",
-            style = MaterialTheme.typography.labelLarge,
-            color = VentyColors.Ember,
-            modifier = Modifier
-                .padding(top = 4.dp)
-                .clip(VentyShapes.Small)
-                .clickable { editing = !editing }
-                .padding(vertical = 6.dp, horizontal = 2.dp),
-        )
-        AnimatedVisibility(visible = editing, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            if (!custom) TextLink(if (editing) "Done" else "Adjust") { editing = !editing }
+            TextLink("Edit in creator") { onOpenCreator(false) }
+            TextLink("New ramp") { onOpenCreator(true) }
+        }
+        AnimatedVisibility(visible = editing && !custom, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)) {
                 ModeToggle(simple, onChange = { simple = it })
                 Spacer(Modifier.height(2.dp))
@@ -398,7 +414,7 @@ private fun ModeToggle(simple: Boolean, onChange: (Boolean) -> Unit) {
 @Composable
 private fun ProfileChips(
     profiles: List<RampProfile>,
-    plan: RampPlan,
+    plan: RampCurve,
     onApply: (RampProfile) -> Unit,
     onSave: () -> Unit,
     onRemove: (RampProfile) -> Unit,
@@ -481,14 +497,28 @@ private fun ProfileChips(
     }
 }
 
-private fun nextProfileName(profiles: List<RampProfile>): String {
+@Composable
+private fun TextLink(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelLarge,
+        color = VentyColors.Ember,
+        modifier = Modifier
+            .padding(top = 4.dp)
+            .clip(VentyShapes.Small)
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp, horizontal = 2.dp),
+    )
+}
+
+internal fun nextProfileName(profiles: List<RampProfile>): String {
     var n = 1
     while (profiles.any { it.name == "My ramp $n" }) n++
     return "My ramp $n"
 }
 
 @Composable
-private fun StepRow(label: String, value: String, onMinus: () -> Unit, onPlus: () -> Unit) {
+internal fun StepRow(label: String, value: String, onMinus: () -> Unit, onPlus: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
         RepeatButton(Icons.Rounded.Remove, "Less $label", size = 36, onStep = onMinus)
@@ -498,7 +528,7 @@ private fun StepRow(label: String, value: String, onMinus: () -> Unit, onPlus: (
 }
 
 @Composable
-private fun RampButton(
+internal fun RampButton(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     filled: Boolean,
@@ -533,18 +563,19 @@ private fun RampButton(
 }
 
 /**
- * The plan as a staircase from start to peak and on through the hold. While it runs, the part
- * already done is drawn in heat with a glow underneath, a marker pulses at "now", and each step
- * up sends a small "+2°" floating off the marker.
+ * The ramp as a staircase from start and on through the hold. While it runs, the part already
+ * done is drawn in heat with a glow underneath, a marker pulses at "now", and each step up sends a
+ * small "+2°" floating off the marker.
  */
 @Composable
-private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifier: Modifier) {
+private fun RampChart(plan: RampCurve, run: RampRun?, fahrenheit: Boolean, modifier: Modifier) {
     val heat = VentyColors.Heat
     val ember = VentyColors.Ember
     val track = VentyColors.Track
     val total = plan.totalMs.coerceAtLeast(1L).toFloat()
     val progress = run?.let { (it.elapsedMs / total).coerceIn(0f, 1f) }
-    val pulse by rememberInfiniteTransition(label = "rampPulse").animateFloat(
+    val dark = LocalDarkMode.current
+    val pulse = if (dark) null else rememberInfiniteTransition(label = "rampPulse").animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
@@ -552,29 +583,40 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
     )
     // A rising "+N°" each time the target steps up.
     val rise = remember { Animatable(1f) }
+    var riseBy by remember { mutableStateOf(0) }
     val haptics = LocalHapticFeedback.current
-    var lastTarget by remember { mutableStateOf(run?.targetC) }
-    LaunchedEffect(run?.targetC) {
-        val t = run?.targetC
+    var lastTarget by remember { mutableStateOf(run?.targetTenths) }
+    LaunchedEffect(run?.targetTenths) {
+        val t = run?.targetTenths
         val prev = lastTarget
         lastTarget = t
         if (t != null && prev != null && t > prev) {
+            riseBy = t - prev
             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            rise.snapTo(0f)
-            rise.animateTo(1f, tween(1300, easing = FastOutSlowInEasing))
+            if (!dark) {
+                rise.snapTo(0f)
+                rise.animateTo(1f, tween(1300, easing = FastOutSlowInEasing))
+            }
         }
     }
     // The staircase draws itself in from the left whenever the plan changes, so picking a profile
     // or adjusting one visibly redraws the curve rather than snapping to it. A change that lands
     // mid-draw carries on from there, so holding a +/- button doesn't keep restarting it.
-    val reveal = remember { Animatable(0f) }
+    val reveal = remember { Animatable(if (dark) 1f else 0f) }
     LaunchedEffect(plan) {
+        if (dark) { reveal.snapTo(1f); return@LaunchedEffect }
         if (reveal.value >= 1f) reveal.snapTo(0f)
         reveal.animateTo(1f, tween(750, easing = FastOutSlowInEasing))
     }
-    val lowC = plan.startC - maxOf(2, (plan.peakC - plan.startC) / 4)
-    val highC = plan.peakC + 1
-    fun yFrac(c: Int) = 1f - (c - lowC).toFloat() / (highC - lowC).coerceAtLeast(1)
+    val changes = plan.changes
+    // All in tenths of °C.
+    val first = changes.first().second
+    val final = changes.last().second
+    val lowest = plan.lowestTenths
+    val highest = plan.highestTenths
+    val low = lowest - maxOf(20, (highest - lowest) / 4)
+    val high = highest + 10
+    fun yFrac(t: Int) = 1f - (t - low).toFloat() / (high - low).coerceAtLeast(1)
 
     BoxWithConstraints(modifier) {
         val density = LocalDensity.current
@@ -584,27 +626,28 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
             val w = size.width
             val h = size.height
             val line = Path()
-            line.moveTo(0f, h * yFrac(plan.startC))
-            for (i in 1..plan.steps) {
-                val x = w * (i * plan.stepEveryMs) / total
-                line.lineTo(x, h * yFrac(plan.targetAt((i - 1) * plan.stepEveryMs)))
-                line.lineTo(x, h * yFrac(plan.targetAt(i * plan.stepEveryMs)))
+            line.moveTo(0f, h * yFrac(first))
+            for (i in 1 until changes.size) {
+                val x = w * changes[i].first / total
+                line.lineTo(x, h * yFrac(changes[i - 1].second))
+                line.lineTo(x, h * yFrac(changes[i].second))
             }
-            line.lineTo(w, h * yFrac(plan.peakC))
+            line.lineTo(w, h * yFrac(final))
             val stroke = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
             // Where the climb ends and the hold begins.
-            val holdX = w * plan.rampMs / total
+            val holdX = w * plan.holdFromMs / total
+            val hasHold = plan.holdFromMs in 1 until plan.totalMs
             clipRect(right = w * reveal.value) {
-                // The plateau gets a warm band so the hold at the top reads at a glance.
-                if (plan.holdMs > 0) {
+                // The plateau gets a warm band so the hold at the end reads at a glance.
+                if (hasHold) {
                     drawRect(
                         Brush.verticalGradient(listOf(ember.copy(alpha = 0.16f), Color.Transparent)),
-                        topLeft = Offset(holdX, h * yFrac(plan.peakC)),
-                        size = androidx.compose.ui.geometry.Size(w - holdX, h * (1f - yFrac(plan.peakC))),
+                        topLeft = Offset(holdX, h * yFrac(final)),
+                        size = androidx.compose.ui.geometry.Size(w - holdX, h * (1f - yFrac(final))),
                     )
                 }
                 drawPath(line, track, style = stroke)
-                if (plan.holdMs > 0) {
+                if (hasHold) {
                     drawLine(track, Offset(holdX, 0f), Offset(holdX, h), strokeWidth = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
                 }
             }
@@ -624,16 +667,19 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
         }
         if (progress != null && run != null) {
             val dotX = wPx * progress
-            val dotY = hPx * yFrac(run.targetC)
+            val dotY = hPx * yFrac(run.targetTenths)
             val dotPx = with(density) { 12.dp.toPx() }
             // Pulse ring and marker.
             Canvas(Modifier.matchParentSize()) {
-                drawCircle(heat.copy(alpha = 0.5f * (1f - pulse)), radius = dotPx * (0.6f + 1.6f * pulse), center = Offset(dotX, dotY))
+                if (pulse != null) {
+                    val p = pulse.value
+                    drawCircle(heat.copy(alpha = 0.5f * (1f - p)), radius = dotPx * (0.6f + 1.6f * p), center = Offset(dotX, dotY))
+                }
                 drawCircle(Brush.radialGradient(listOf(Color.White, ember, heat), center = Offset(dotX, dotY), radius = dotPx / 2), radius = dotPx / 2, center = Offset(dotX, dotY))
             }
             if (rise.value < 1f) {
                 Text(
-                    "+${delta(run.plan.stepC, fahrenheit)}°",
+                    "${signedTenths(riseBy, fahrenheit)}°",
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                     color = ember,
                     modifier = Modifier
@@ -647,16 +693,16 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
                 )
             }
         }
-        // Start and peak labels at the ends of the staircase.
+        // Lowest and highest temperatures at the corners of the staircase.
         Box(Modifier.matchParentSize()) {
             Text(
-                "${Temperature.toDisplay(plan.startC * 10, fahrenheit)}°",
+                "${Temperature.toDisplay(lowest, fahrenheit)}°",
                 style = MaterialTheme.typography.labelSmall,
                 color = VentyColors.Muted,
                 modifier = Modifier.align(Alignment.BottomStart),
             )
             Text(
-                "${Temperature.toDisplay(plan.peakC * 10, fahrenheit)}°",
+                "${Temperature.toDisplay(highest, fahrenheit)}°",
                 style = MaterialTheme.typography.labelSmall,
                 color = VentyColors.Muted,
                 modifier = Modifier.align(Alignment.TopEnd),
@@ -686,20 +732,36 @@ private fun simpleSummary(p: RampPlan, f: Boolean): String {
     }
 }
 
+internal fun curveSummary(c: RampCurve, f: Boolean): String {
+    val first = Temperature.toDisplay(c.tenthsOf(c.points.first().temp), f)
+    val last = Temperature.toDisplay(c.tenthsOf(c.points.last().temp), f)
+    val peak = Temperature.toDisplay(c.highestTenths, f)
+    val n = c.points.size
+    val shape = if (n == 1) "Holds $first°" else "$first° to $last° through $n points" + if (peak != last && peak != first) ", peaking at $peak°" else ""
+    return "$shape across ${clockWords(c.totalMs)}, then the heater turns off."
+}
+
 /** Simple mode edits in 30 s steps, and spreading the climb leaves a few ms of rounding to hide. */
 private fun roundTo30s(ms: Long): Long = (ms + 15_000L) / 30_000L * 30_000L
 
 /** A step size in the display unit. */
-private fun delta(stepC: Int, f: Boolean): Int = if (f) (stepC * 9 / 5.0).roundToInt() else stepC
+internal fun delta(stepC: Int, f: Boolean): Int = if (f) (stepC * 9 / 5.0).roundToInt() else stepC
+
+/** A change given in tenths of °C, in whole display degrees with its sign: "+2", "−1". */
+internal fun signedTenths(tenths: Int, f: Boolean): String {
+    val a = kotlin.math.abs(tenths)
+    val d = (if (f) a * 9 / 50.0 else a / 10.0).roundToInt().coerceAtLeast(if (a > 0) 1 else 0)
+    return if (tenths < 0) "\u2212$d" else "+$d"
+}
 
 /** 0:42, 12:05. Rounds up, so the countdown reaches 0:00 just as the change happens. */
-private fun clock(ms: Long): String {
+internal fun clock(ms: Long): String {
     val s = ((ms + 999) / 1000).coerceAtLeast(0)
     return "${s / 60}:${"%02d".format(s % 60)}"
 }
 
 /** "1 min", "1 min 30 s", "30 s". */
-private fun clockWords(ms: Long): String {
+internal fun clockWords(ms: Long): String {
     val s = ms / 1000
     val m = s / 60
     val r = s % 60

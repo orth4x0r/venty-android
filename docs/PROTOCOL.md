@@ -84,9 +84,9 @@ Request packets: the app sends 20-byte zero-filled packets for most commands and
 | 0 | `0x01` | |
 | 1 | mask / status | |
 | 2–3 | current temperature | u16 LE, ×10 °C. `0x8000` = not available. Reportedly **always** `0x8000` on the Venty (see note below) |
-| 4–5 | target temperature | u16 LE, ×10 °C. The base setpoint, without boost |
-| 6 | boost offset | degrees added in boost mode, **in the device's display unit** (°F when the Fahrenheit flag is set) |
-| 7 | superboost offset | degrees added on top of boost in superboost mode, same unit as byte 6 |
+| 4–5 | target temperature | u16 LE, ×10 °C. What the heater aims for: the setpoint, **plus the offsets while in boost or superboost**, capped at 210 °C (see note below) |
+| 6 | boost offset | whole **°C** added in boost mode, also when the device displays °F (see note below) |
+| 7 | superboost offset | whole °C added on top of boost in superboost mode |
 | 8 | battery | 0–100 % |
 | 9–10 | auto-shutoff countdown | seconds. **The vendor app computes `b9 + b10`, not a u16**; its progress bar treats 120 s as 100 % |
 | 11 | heater mode | 0 off, 1 on, 2 boost, 3 superboost |
@@ -137,7 +137,15 @@ Factory reset           01 80 … byte 14 = 04, byte 15 = 04
 
 Notes:
 
-- **Target temperature is the base setpoint.** When the device is in boost or superboost, the vendor app shows target + offsets, and before writing a new target it subtracts the active offsets again. Do the same: keep the UI's "effective" temperature separate from the value written.
+- **In boost the reported target already includes the offsets, and the offsets are °C.** Checked on a real Venty (firmware V01.11, set to °F, boost +15, superboost +13) on 2026-11-24, switching modes on the device at a 190 °C (374 °F) setpoint:
+
+  | Mode (byte 11) | Bytes 4–5 | Target |
+  |---|---|---|
+  | 1, normal | `6C 07` | 190.0 °C (374 °F) |
+  | 2, boost | `02 08` | 205.0 °C (401 °F) = 190 + 15 °C |
+  | 3, superboost | `34 08` | 210.0 °C (410 °F) = 190 + 15 + 13 = 218, capped |
+
+  The device's own display showed the same 401 °F in boost. So show bytes 4–5 as they are, and work out the base setpoint from the last normal-mode reading (or the reported target minus the offsets when it isn't capped). Adding the offsets again double-counts them. Before writing a new target while boosting, subtract the active offsets, as the vendor app does, so the base is what gets written. An earlier Reddit report suggested the offsets count in °F on a °F device; the readings above contradict that, at least for V01.11.
 - **No live temperature on the Venty.** firsttris/reactive-volcano-app reports that the Venty never fills bytes 2–3 (always `0x8000`). Show the effective target with a heating / reached state (settings flag bit 1) instead of a live reading. **Unverified** by this project.
 - **Boost / superboost from the app.** The official app only ever writes heater mode 0 or 1 (power toggle); boost and superboost are normally entered with the device button and then reported in byte 11. szv99/storz-bickel-ble and firsttris/reactive-volcano-app both write 2 and 3 directly, which suggests the device accepts it. Still **unverified** here.
 - **Ranges.** The app does not clamp target or offsets. The Venty's published range is 40–210 °C; clamp in the client. Boost and superboost offsets reportedly range 1–99 °C (reactive-volcano-app); read them back after writing.

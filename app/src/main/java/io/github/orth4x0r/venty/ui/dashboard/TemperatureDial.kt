@@ -1,5 +1,6 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
+import io.github.orth4x0r.venty.ui.theme.LocalDarkMode
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -121,21 +122,24 @@ fun TemperatureDial(
     )
     val target by animateFloatAsState(fraction(targetTenths, range), spring(stiffness = Spring.StiffnessMediumLow), label = "target")
     val color by animateColorAsState(accent, tween(600), label = "accent")
-    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
+    // Dark mode keeps the dial still: no breathing glow, running spark, spinning corona, ready
+    // flash or boost punch. The arc and marker still move with the temperature.
+    val dark = LocalDarkMode.current
+    val pulse = if (dark) null else rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue = 0.10f,
         targetValue = 0.28f,
         animationSpec = infiniteRepeatable(tween(1300), RepeatMode.Reverse),
         label = "pulse",
     )
-    val shimmer by rememberInfiniteTransition(label = "shimmer").animateFloat(
+    val shimmer = if (dark) null else rememberInfiniteTransition(label = "shimmer").animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(1800, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
         label = "shimmerPos",
     )
-    val shimmerAlpha by animateFloatAsState(if (pulsing) 1f else 0f, tween(500), label = "shimmerAlpha")
-    val coronaLevel by animateFloatAsState((energy.coerceIn(0, 3) / 3f), tween(800), label = "corona")
-    val corona by rememberInfiniteTransition(label = "coronaSpin").animateFloat(
+    val shimmerAlpha by animateFloatAsState(if (pulsing && !dark) 1f else 0f, tween(500), label = "shimmerAlpha")
+    val coronaLevel by animateFloatAsState(if (dark) 0f else energy.coerceIn(0, 3) / 3f, tween(800), label = "corona")
+    val corona = if (dark) null else rememberInfiniteTransition(label = "coronaSpin").animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(tween(3600, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart),
@@ -147,7 +151,7 @@ fun TemperatureDial(
     val flash = remember { Animatable(0f) }
     val wasReady = remember { booleanArrayOf(ready) }
     LaunchedEffect(ready) {
-        if (ready && !wasReady[0]) {
+        if (ready && !wasReady[0] && !dark) {
             flash.snapTo(1f)
             flash.animateTo(0f, tween(600, easing = FastOutSlowInEasing))
         }
@@ -169,13 +173,15 @@ fun TemperatureDial(
         lastEnergy[0] = energy
         if (energy >= 2 && energy != prev) {
             whooshSuper[0] = energy >= 3
-            fxScope.launch {
-                whoosh.snapTo(0f)
-                whoosh.animateTo(1f, tween(if (energy >= 3) 950 else 700, easing = LinearOutSlowInEasing))
-            }
-            fxScope.launch {
-                punch.animateTo(1.07f, tween(110, easing = FastOutSlowInEasing))
-                punch.animateTo(1f, spring(dampingRatio = 0.32f, stiffness = Spring.StiffnessMediumLow))
+            if (!dark) {
+                fxScope.launch {
+                    whoosh.snapTo(0f)
+                    whoosh.animateTo(1f, tween(if (energy >= 3) 950 else 700, easing = LinearOutSlowInEasing))
+                }
+                fxScope.launch {
+                    punch.animateTo(1.07f, tween(110, easing = FastOutSlowInEasing))
+                    punch.animateTo(1f, spring(dampingRatio = 0.32f, stiffness = Spring.StiffnessMediumLow))
+                }
             }
             view.boostRumble()
         }
@@ -261,13 +267,13 @@ fun TemperatureDial(
                     val tickWidth = 2.dp.toPx()
                     onDrawBehind {
                         // Read the pulse here, in drawing, so it redraws without recomposing.
-                        val glowAlpha = if (pulsing) pulse else if (ready) 0.2f else 0.12f
+                        val glowAlpha = if (pulsing && pulse != null) pulse.value else if (ready) 0.2f else 0.12f
                         drawCircle(glowBrush, alpha = glowAlpha)
 
                         // Corona: a rotating ring of light outside the track, stronger in boost.
                         val level = coronaLevel
-                        if (level > 0.01f) {
-                            rotate(corona) {
+                        if (level > 0.01f && corona != null) {
+                            rotate(corona.value) {
                                 drawCircle(
                                     brush = coronaBrush,
                                     radius = g.radius + g.stroke * 1.4f,
@@ -316,9 +322,9 @@ fun TemperatureDial(
 
                         // A bright spark that runs along the arc while heating.
                         val sa = shimmerAlpha
-                        if (sa > 0.01f && c > 0.02f) {
+                        if (sa > 0.01f && c > 0.02f && shimmer != null) {
                             val len = 0.12f
-                            val head = shimmer * (1f + len)
+                            val head = shimmer.value * (1f + len)
                             val from = (head - len).coerceIn(0f, 1f) * c
                             val to = head.coerceIn(0f, 1f) * c
                             if (to > from) {
