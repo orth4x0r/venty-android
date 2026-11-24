@@ -87,7 +87,7 @@ class RampCurveTest {
     }
 
     @Test
-    fun normalizedOrdersSnapsAndSpacesPoints() {
+    fun normalizedOrdersAndSpacesPointsWithoutMovingOthers() {
         val c = RampCurve(
             listOf(
                 RampPoint(3 * minute + 7_000, 200, RampMove.Climb),
@@ -96,19 +96,19 @@ class RampCurveTest {
             ),
             endMs = 0,
         ).normalized()
-        assertEquals(listOf(0L, 3 * minute, 3 * minute + 15_000), c.points.map { it.atMs })
+        assertEquals(listOf(0L, 3 * minute + 2_000, 3 * minute + 17_000), c.points.map { it.atMs })
         assertEquals(RampMove.Jump, c.points.first().move)
-        assertEquals(c.points.last().atMs + RampCurve.MIN_TAIL_MS, c.endMs)
+        assertEquals(c.points.last().atMs, c.endMs)
     }
 
     @Test
-    fun normalizedCapsLengthAndPointCount() {
-        val many = List(20) { RampPoint(it * minute, 180 + it, RampMove.Climb) }
-        val c = RampCurve(many, endMs = 99 * minute).normalized()
-        assertEquals(RampCurve.MAX_POINTS, c.points.size)
-        assertEquals(RampCurve.MAX_TOTAL_MS, c.endMs)
-        val late = RampCurve(listOf(RampPoint(0, 180), RampPoint(40 * minute, 200)), endMs = 45 * minute).normalized()
-        assertEquals(1, late.points.size)
+    fun climbInBiggerStepsEndsWithAShortOne() {
+        // 180 to 187 in 3° steps over 3 minutes: +3, +3, +1, a minute apart.
+        val c = RampCurve(
+            listOf(RampPoint(0, 180), RampPoint(3 * minute, 187, RampMove.Climb, step = 3)),
+            endMs = 4 * minute,
+        )
+        assertEquals(listOf(0L to 180, minute to 183, 2 * minute to 186, 3 * minute to 187), c.degreeChanges)
     }
 
     @Test
@@ -130,13 +130,50 @@ class RampCurveTest {
     }
 
     @Test
-    fun planConvertsToTheSameEndpoints() {
-        val p = RampPlan(startC = 180, stepC = 2, peakC = 200, holdMs = 3 * minute)
-        val c = p.toCurve(fahrenheit = false)
-        assertEquals(1800, c.tenthsAt(0))
-        assertEquals(2000, c.tenthsAt(p.rampMs))
-        assertEquals(p.totalMs, c.totalMs)
-        assertEquals(listOf(356, 392), p.toCurve(fahrenheit = true).points.map { it.temp })
+    fun plansConvertToCurvesExactlyAndBack() {
+        val plans = listOf(
+            RampPlan(),
+            RampPlan(startC = 170, stepC = 2, peakC = 190, holdMs = 2 * minute),
+            RampPlan(startC = 190, stepC = 4, peakC = 210, holdMs = 2 * minute),
+            RampPlan(startC = 180, stepC = 3, stepEveryMs = 45_000, peakC = 200, holdMs = 0),
+            RampPlan.span(startC = 175, finishC = 205, totalMs = 15 * minute, plateauMs = 2 * minute),
+            RampPlan.span(startC = 180, finishC = 187, totalMs = 10 * minute),
+        )
+        for (p in plans) {
+            val c = p.toCurve()
+            assertEquals(p.totalMs, c.totalMs)
+            var t = 0L
+            while (t <= p.totalMs) {
+                assertEquals("$p at $t", p.targetAt(t) * 10, c.tenthsAt(t))
+                assertEquals("$p at $t", p.phaseAt(t), c.phaseAt(t))
+                t += 1_000L
+            }
+            assertEquals(p, RampPlan.fromCurve(c))
+        }
+    }
+
+    @Test
+    fun flatPlanRoundTrips() {
+        val p = RampPlan.span(startC = 195, finishC = 195, totalMs = 8 * minute)
+        assertEquals(p, RampPlan.fromCurve(p.toCurve()))
+    }
+
+    @Test
+    fun handDrawnCurvesAreNotPlans() {
+        val c = RampCurve(
+            listOf(RampPoint(0, 180), RampPoint(minute, 190, RampMove.Jump), RampPoint(2 * minute, 185, RampMove.Climb)),
+            endMs = 3 * minute,
+        )
+        assertEquals(null, RampPlan.fromCurve(c))
+        assertEquals(null, RampPlan.fromCurve(RampPlan().toCurve().inUnit(fahrenheit = true)))
+    }
+
+    @Test
+    fun unitConversionScalesSteps() {
+        val f = RampPlan(stepC = 2).toCurve().inUnit(fahrenheit = true)
+        assertEquals(4, f.points[1].step)
+        assertEquals(1, RampCurve(listOf(RampPoint(0, 356), RampPoint(minute, 366, RampMove.Climb)), 2 * minute, true)
+            .inUnit(fahrenheit = false).points[1].step)
     }
 
     @Test

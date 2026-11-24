@@ -95,9 +95,8 @@ fun RampCreatorScreen(
     onSave: (String, RampCurve) -> Unit,
     onBack: () -> Unit,
 ) {
-    // Everything here is in whole degrees of the curve's unit: the device's to begin with, and
-    // switchable below.
-    var curve by remember { mutableStateOf(initial.inUnit(fahrenheit).fitToRange(kind.minTarget, kind.maxTarget)) }
+    // Everything here is in whole degrees of the ramp's own unit, switchable below.
+    var curve by remember { mutableStateOf(initial.fitToRange(kind.minTarget, kind.maxTarget)) }
     val range = curve.degreeRange(kind.minTarget, kind.maxTarget)
     val minD = range.first
     val maxD = range.last
@@ -111,17 +110,22 @@ fun RampCreatorScreen(
     fun show(d: Int) = "$d°"
 
     fun update(pts: List<RampPoint>, end: Long = curve.endMs) {
-        val last = pts.maxOf { it.atMs }
-        curve = curve.copy(points = pts, endMs = maxOf(end, last + RampCurve.MIN_TAIL_MS)).normalized()
+        // Room after the last point, and no longer than the creator allows (unless it already was).
+        val minEnd = pts.maxOf { it.atMs } + RampCurve.MIN_TAIL_MS
+        val maxEnd = maxOf(RampCurve.MAX_TOTAL_MS, curve.endMs, minEnd)
+        curve = curve.copy(points = pts, endMs = end.coerceIn(minEnd, maxEnd)).normalized()
     }
 
-    /** Where point [i] may sit in time without passing its neighbours. */
-    fun timeBounds(i: Int): LongRange = when (i) {
-        0 -> 0L..0L
-        else -> (points[i - 1].atMs + RampCurve.MIN_GAP_MS)..(
-            if (i < points.lastIndex) points[i + 1].atMs - RampCurve.MIN_GAP_MS
-            else RampCurve.MAX_TOTAL_MS - RampCurve.MIN_TAIL_MS
-        )
+    /**
+     * Where point [i] may sit in time without passing its neighbours. The last point stays within
+     * the creator's length limit, unless a ramp from the Steps editor already put it further out.
+     */
+    fun timeBounds(i: Int): LongRange {
+        if (i == 0) return 0L..0L
+        val lo = points[i - 1].atMs + RampCurve.MIN_GAP_MS
+        val hi = if (i < points.lastIndex) points[i + 1].atMs - RampCurve.MIN_GAP_MS
+        else maxOf(RampCurve.MAX_TOTAL_MS - RampCurve.MIN_TAIL_MS, points[i].atMs)
+        return lo..maxOf(lo, hi)
     }
 
     fun setPoint(i: Int, atMs: Long = points[i].atMs, temp: Int = points[i].temp, move: RampMove = points[i].move) {
@@ -230,8 +234,8 @@ fun RampCreatorScreen(
                     StepRow(
                         "Heater off at",
                         clock(curve.endMs),
-                        onMinus = { update(points, curve.endMs - 30_000L) },
-                        onPlus = { update(points, curve.endMs + 30_000L) },
+                        onMinus = { update(points, RampCurve.snap(curve.endMs - 30_000L)) },
+                        onPlus = { update(points, RampCurve.snap(curve.endMs + 30_000L)) },
                     )
                     Text(
                         "Holds ${show(points.last().temp)} after the last point, then turns the heater off.",
@@ -329,7 +333,7 @@ private fun PointEditor(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text("Get there by", style = MaterialTheme.typography.titleSmall)
-                PillToggle(listOf(RampMove.Jump to "Jump", RampMove.Climb to "1$unit steps"), p.move, onMove)
+                PillToggle(listOf(RampMove.Jump to "Jump", RampMove.Climb to "${p.step}$unit steps"), p.move, onMove)
                 val prev = points[index - 1]
                 val d = p.temp - prev.temp
                 val text = when {
@@ -337,8 +341,9 @@ private fun PointEditor(
                     p.move == RampMove.Jump ->
                         "Holds ${show(prev.temp)} until ${clock(p.atMs)}, then goes straight to ${show(p.temp)}."
                     else -> {
-                        val every = (p.atMs - prev.atMs) / abs(d)
-                        "${if (d > 0) "+1" else "\u22121"}$unit every ${seconds(every)} from ${show(prev.temp)}, " +
+                        val n = (abs(d) + p.step - 1) / p.step
+                        val every = (p.atMs - prev.atMs) / n
+                        "${if (d > 0) "+" else "\u2212"}${minOf(p.step, abs(d))}$unit every ${seconds(every)} from ${show(prev.temp)}, " +
                             "reaching ${show(p.temp)} at ${clock(p.atMs)}." +
                             if (every < 5_000L) " That's quicker than the heater can follow." else ""
                     }

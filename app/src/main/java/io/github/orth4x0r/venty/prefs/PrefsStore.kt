@@ -1,7 +1,6 @@
 package io.github.orth4x0r.venty.prefs
 
 import android.content.Context
-import io.github.orth4x0r.venty.session.Ramp
 import io.github.orth4x0r.venty.session.RampCurve
 import io.github.orth4x0r.venty.session.RampMove
 import io.github.orth4x0r.venty.session.RampPlan
@@ -31,21 +30,11 @@ class PrefsStore(context: Context) {
 
     private val _ramp = MutableStateFlow(loadRamp())
     /** The last ramp the user set up, used for the next one. */
-    val ramp: StateFlow<Ramp> = _ramp.asStateFlow()
+    val ramp: StateFlow<RampCurve> = _ramp.asStateFlow()
 
-    fun setRamp(ramp: Ramp) {
+    fun setRamp(ramp: RampCurve) {
         _ramp.value = ramp
-        val e = sp.edit()
-        when (ramp) {
-            is RampCurve -> e.putString("ramp_curve", curveJson(ramp).toString())
-            is RampPlan -> e.remove("ramp_curve")
-                .putInt("ramp_start", ramp.startC)
-                .putInt("ramp_step", ramp.stepC)
-                .putLong("ramp_every", ramp.stepEveryMs)
-                .putInt("ramp_peak", ramp.peakC)
-                .putLong("ramp_hold", ramp.holdMs)
-        }
-        e.apply()
+        sp.edit().putString("ramp_curve", curveJson(ramp).toString()).apply()
     }
 
     private val _rampProfiles = MutableStateFlow(loadRampProfiles())
@@ -79,13 +68,14 @@ class PrefsStore(context: Context) {
             val arr = JSONArray(raw)
             List(arr.length()) { i ->
                 val o = arr.getJSONObject(i)
+                // Saved before every ramp became a curve: start, step, every, peak, hold.
                 val ramp = o.optJSONObject("curve")?.let(::parseCurve) ?: RampPlan(
                     startC = o.getInt("start"),
                     stepC = o.getInt("step"),
                     stepEveryMs = o.getLong("every"),
                     peakC = o.getInt("peak"),
                     holdMs = o.getLong("hold"),
-                )
+                ).toCurve()
                 RampProfile(o.getString("name"), ramp)
             }
         }.getOrDefault(RampProfile.DEFAULTS)
@@ -95,21 +85,12 @@ class PrefsStore(context: Context) {
         _rampProfiles.value = list
         val arr = JSONArray()
         list.forEach {
-            val o = JSONObject().put("name", it.name)
-            when (val r = it.plan) {
-                is RampCurve -> o.put("curve", curveJson(r))
-                is RampPlan -> o.put("start", r.startC)
-                    .put("step", r.stepC)
-                    .put("every", r.stepEveryMs)
-                    .put("peak", r.peakC)
-                    .put("hold", r.holdMs)
-            }
-            arr.put(o)
+            arr.put(JSONObject().put("name", it.name).put("curve", curveJson(it.plan)))
         }
         sp.edit().putString("ramp_profiles", arr.toString()).apply()
     }
 
-    private fun loadRamp(): Ramp {
+    private fun loadRamp(): RampCurve {
         sp.getString("ramp_curve", null)?.let { raw ->
             runCatching { parseCurve(JSONObject(raw)) }.getOrNull()?.let { return it }
         }
@@ -120,12 +101,12 @@ class PrefsStore(context: Context) {
             stepEveryMs = sp.getLong("ramp_every", d.stepEveryMs),
             peakC = sp.getInt("ramp_peak", d.peakC),
             holdMs = sp.getLong("ramp_hold", d.holdMs),
-        )
+        ).toCurve()
     }
 
     private fun curveJson(c: RampCurve): JSONObject {
         val pts = JSONArray()
-        c.points.forEach { pts.put(JSONObject().put("t", it.atMs).put("d", it.temp).put("m", it.move.name)) }
+        c.points.forEach { pts.put(JSONObject().put("t", it.atMs).put("d", it.temp).put("m", it.move.name).put("s", it.step)) }
         return JSONObject().put("points", pts).put("end", c.endMs).put("f", c.fahrenheit)
     }
 
@@ -139,6 +120,7 @@ class PrefsStore(context: Context) {
                     // "c" is whole °C, from before curves kept their unit.
                     temp = if (p.has("d")) p.getInt("d") else p.getInt("c"),
                     move = RampMove.entries.firstOrNull { it.name == p.optString("m") } ?: RampMove.Jump,
+                    step = p.optInt("s", 1),
                 )
             },
             endMs = o.getLong("end"),

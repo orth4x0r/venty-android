@@ -11,7 +11,7 @@ import android.os.ParcelUuid
 import android.os.SystemClock
 import android.util.Log
 import io.github.orth4x0r.venty.session.RampPhase
-import io.github.orth4x0r.venty.session.Ramp
+import io.github.orth4x0r.venty.session.RampCurve
 import io.github.orth4x0r.venty.session.RampRun
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -648,7 +648,7 @@ class VentyController(context: Context) {
      * then holds and turns the heater off. Keeps going through a dropped link, re-sending the
      * target once it's back. Stops early if the heater is turned off or the target is changed.
      */
-    fun startRamp(plan: Ramp) {
+    fun startRamp(plan: RampCurve) {
         val kind = _kind.value
         val p = plan.fitToRange(kind.minTarget, kind.maxTarget)
         rampJob?.cancel()

@@ -87,7 +87,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.orth4x0r.venty.ble.DeviceKind
-import io.github.orth4x0r.venty.session.Ramp
 import io.github.orth4x0r.venty.session.RampCurve
 import io.github.orth4x0r.venty.session.RampPhase
 import io.github.orth4x0r.venty.session.RampPlan
@@ -110,10 +109,10 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 @Composable
 internal fun RampCard(
     run: RampRun?,
-    plan: Ramp,
+    plan: RampCurve,
     kind: DeviceKind,
     fahrenheit: Boolean,
-    onPlan: (Ramp) -> Unit,
+    onPlan: (RampCurve) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     profiles: List<RampProfile> = emptyList(),
@@ -233,24 +232,26 @@ private fun RunningBody(run: RampRun, fahrenheit: Boolean, onStop: () -> Unit) {
 
 @Composable
 private fun IdleBody(
-    current: Ramp,
+    current: RampCurve,
     kind: DeviceKind,
     fahrenheit: Boolean,
-    onPlan: (Ramp) -> Unit,
+    onPlan: (RampCurve) -> Unit,
     onStart: () -> Unit,
     profiles: List<RampProfile>,
     onSaveProfile: (RampProfile) -> Unit,
     onRemoveProfile: (RampProfile) -> Unit,
     onOpenCreator: () -> Unit,
 ) {
-    // A ramp from the creator is edited there; the +/- rows below only handle the classic climb.
-    val plan = current as? RampPlan ?: RampPlan()
-    val custom = current is RampCurve
+    // The +/- rows below edit a steady climb, read back from the curve; anything else (from the
+    // creator) is edited there.
+    val stepPlan = remember(current) { RampPlan.fromCurve(current) }
+    val plan = stepPlan ?: RampPlan()
+    val custom = stepPlan == null
     var editing by rememberSaveable { mutableStateOf(false) }
     var simple by rememberSaveable { mutableStateOf(true) }
     val minC = kind.minTarget / 10
     val maxC = kind.maxTarget / 10
-    fun change(p: RampPlan) = onPlan(p.fitTo(minC, maxC))
+    fun change(p: RampPlan) = onPlan(p.fitTo(minC, maxC).toCurve())
     // Simple mode reads the plan back as start, finish, bowl length and plateau, and rebuilds it
     // from those, so the steps are worked out for you.
     val bowlMs = roundTo30s(plan.totalMs)
@@ -260,7 +261,7 @@ private fun IdleBody(
         val f = finish.coerceIn(s, maxC)
         val t = total.coerceIn(RampPlan.MIN_SESSION_MS, RampPlan.MAX_SESSION_MS)
         val h = plateau.coerceIn(0L, minOf(RampPlan.MAX_HOLD_MS, t - 60_000L))
-        onPlan(RampPlan.span(s, f, t, h))
+        onPlan(RampPlan.span(s, f, t, h).toCurve())
     }
     Column {
         ProfileChips(
@@ -273,7 +274,7 @@ private fun IdleBody(
         Spacer(Modifier.height(8.dp))
         AnimatedContent(
             targetState = when {
-                current is RampCurve -> curveSummary(current, fahrenheit)
+                custom -> curveSummary(current, fahrenheit)
                 simple -> simpleSummary(plan, fahrenheit)
                 else -> summary(plan, fahrenheit)
             },
@@ -411,7 +412,7 @@ private fun ModeToggle(simple: Boolean, onChange: (Boolean) -> Unit) {
 @Composable
 private fun ProfileChips(
     profiles: List<RampProfile>,
-    plan: Ramp,
+    plan: RampCurve,
     onApply: (RampProfile) -> Unit,
     onSave: () -> Unit,
     onRemove: (RampProfile) -> Unit,
@@ -565,7 +566,7 @@ internal fun RampButton(
  * small "+2°" floating off the marker.
  */
 @Composable
-private fun RampChart(plan: Ramp, run: RampRun?, fahrenheit: Boolean, modifier: Modifier) {
+private fun RampChart(plan: RampCurve, run: RampRun?, fahrenheit: Boolean, modifier: Modifier) {
     val heat = VentyColors.Heat
     val ember = VentyColors.Ember
     val track = VentyColors.Track

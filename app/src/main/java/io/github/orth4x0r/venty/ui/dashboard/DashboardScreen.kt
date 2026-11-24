@@ -16,9 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.prefs.BatterySample
 import io.github.orth4x0r.venty.prefs.Preset
-import io.github.orth4x0r.venty.session.Ramp
 import io.github.orth4x0r.venty.session.RampCurve
-import io.github.orth4x0r.venty.session.RampPlan
 import io.github.orth4x0r.venty.ui.ramp.RampCreatorScreen
 import io.github.orth4x0r.venty.session.RampProfile
 import io.github.orth4x0r.venty.session.RampRun
@@ -290,12 +288,9 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
     // What the ramp creator opens with: the curve, its name, and the saved ramp it would replace.
     var creatorSeed by remember { mutableStateOf<CreatorSeed?>(null) }
     fun seedCreator(): CreatorSeed {
+        // Opens in the ramp's own unit; the creator has a °F/°C switch.
         val match = rampProfiles.firstOrNull { it.plan == rampPlan }
-        val f = status?.fahrenheit == true
-        return when (val r = rampPlan) {
-            is RampCurve -> CreatorSeed(r.inUnit(f), match?.name ?: nextProfileName(rampProfiles), match)
-            is RampPlan -> CreatorSeed(r.toCurve(f), nextProfileName(rampProfiles), null)
-        }
+        return CreatorSeed(rampPlan, match?.name ?: nextProfileName(rampProfiles), match)
     }
 
     var notice by remember { mutableStateOf<String?>(null) }
@@ -697,8 +692,8 @@ private fun Dashboard(
     onBoost: (Int) -> Unit,
     onSuperBoost: (Int) -> Unit,
     ramp: RampRun?,
-    rampPlan: Ramp,
-    onRampPlan: (Ramp) -> Unit,
+    rampPlan: RampCurve,
+    onRampPlan: (RampCurve) -> Unit,
     onOpenRampCreator: () -> Unit,
     onStartRamp: () -> Unit,
     onStopRamp: () -> Unit,
