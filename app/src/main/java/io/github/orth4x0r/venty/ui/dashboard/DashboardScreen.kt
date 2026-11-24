@@ -16,7 +16,10 @@ import androidx.compose.ui.platform.LocalContext
 import io.github.orth4x0r.venty.VentyApp
 import io.github.orth4x0r.venty.prefs.BatterySample
 import io.github.orth4x0r.venty.prefs.Preset
+import io.github.orth4x0r.venty.session.Ramp
+import io.github.orth4x0r.venty.session.RampCurve
 import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.ui.ramp.RampCreatorScreen
 import io.github.orth4x0r.venty.session.RampProfile
 import io.github.orth4x0r.venty.session.RampRun
 import io.github.orth4x0r.venty.session.BatteryForecast
@@ -192,7 +195,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class Page {
-    Main, Settings, History, FindMy, Wrapped;
+    Main, Settings, History, FindMy, Wrapped, RampCreator;
 
     /** Where back goes: the radar returns to Settings and the recap to History. */
     val parent: Page get() = when (this) {
@@ -281,6 +284,17 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                 }
             }
             throw cancelled
+        }
+    }
+
+    // What the ramp creator opens with: the curve, its name, and the saved ramp it would replace.
+    var creatorSeed by remember { mutableStateOf<CreatorSeed?>(null) }
+    fun seedCreator(): CreatorSeed {
+        val match = rampProfiles.firstOrNull { it.plan == rampPlan }
+        val f = status?.fahrenheit == true
+        return when (val r = rampPlan) {
+            is RampCurve -> CreatorSeed(r.inUnit(f), match?.name ?: nextProfileName(rampProfiles), match)
+            is RampPlan -> CreatorSeed(r.toCurve(f), nextProfileName(rampProfiles), null)
         }
     }
 
@@ -418,6 +432,30 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             readRssi = controller::readRssi,
                             onBack = { closePage() },
                         )
+                        Page.RampCreator -> {
+                            val seed = creatorSeed ?: remember { seedCreator() }
+                            RampCreatorScreen(
+                                initial = seed.curve,
+                                initialName = seed.name,
+                                replacing = seed.original != null,
+                                canSaveNew = !app.prefs.rampProfilesFull,
+                                kind = kind,
+                                fahrenheit = status?.fahrenheit == true,
+                                onUse = { c ->
+                                    app.prefs.setRamp(c)
+                                    closePage()
+                                    showNotice("Ramp ready, start it from the ramp card")
+                                },
+                                onSave = { n, c ->
+                                    val profile = RampProfile(n.ifBlank { seed.name }, c)
+                                    seed.original?.let { app.prefs.replaceRampProfile(it, profile) } ?: app.prefs.addRampProfile(profile)
+                                    app.prefs.setRamp(c)
+                                    closePage()
+                                    showNotice("Saved ${profile.name}")
+                                },
+                                onBack = { closePage() },
+                            )
+                        }
                         Page.Wrapped -> WrappedScreen(
                             history = history,
                             fahrenheit = status?.fahrenheit == true,
@@ -492,6 +530,10 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                     ramp = ramp,
                                     rampPlan = rampPlan,
                                     onRampPlan = app.prefs::setRamp,
+                                    onOpenRampCreator = {
+                                        creatorSeed = seedCreator()
+                                        openPage(Page.RampCreator)
+                                    },
                                     onStartRamp = { controller.startRamp(rampPlan) },
                                     onStopRamp = { controller.stopRamp() },
                                     rampProfiles = rampProfiles,
@@ -655,8 +697,9 @@ private fun Dashboard(
     onBoost: (Int) -> Unit,
     onSuperBoost: (Int) -> Unit,
     ramp: RampRun?,
-    rampPlan: RampPlan,
-    onRampPlan: (RampPlan) -> Unit,
+    rampPlan: Ramp,
+    onRampPlan: (Ramp) -> Unit,
+    onOpenRampCreator: () -> Unit,
     onStartRamp: () -> Unit,
     onStopRamp: () -> Unit,
     rampProfiles: List<RampProfile>,
@@ -839,6 +882,7 @@ private fun Dashboard(
             profiles = rampProfiles,
             onSaveProfile = onSaveRampProfile,
             onRemoveProfile = onRemoveRampProfile,
+            onOpenCreator = onOpenRampCreator,
         )
     }
     // Set-and-forget things live below the controls, under their own heading.
@@ -1916,3 +1960,5 @@ internal fun Card(backdrop: Modifier = Modifier, content: @Composable () -> Unit
 /** "45 min" under an hour and a half, "2 h 10 min" from there, so short spans don't read "0 h 53 m". */
 private fun hoursAndMinutes(minutes: Int): String =
     if (minutes < 90) "$minutes min" else "${minutes / 60} h ${minutes % 60} min"
+
+private data class CreatorSeed(val curve: RampCurve, val name: String, val original: RampProfile?)

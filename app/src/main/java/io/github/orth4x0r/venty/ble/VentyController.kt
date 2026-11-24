@@ -11,7 +11,7 @@ import android.os.ParcelUuid
 import android.os.SystemClock
 import android.util.Log
 import io.github.orth4x0r.venty.session.RampPhase
-import io.github.orth4x0r.venty.session.RampPlan
+import io.github.orth4x0r.venty.session.Ramp
 import io.github.orth4x0r.venty.session.RampRun
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -644,16 +644,16 @@ class VentyController(context: Context) {
     // ---- Ramp -----------------------------------------------------------------------------
 
     /**
-     * Turns the heater on at the plan's start temperature and steps the target up on schedule,
+     * Turns the heater on at the ramp's first temperature and moves the target on schedule,
      * then holds and turns the heater off. Keeps going through a dropped link, re-sending the
      * target once it's back. Stops early if the heater is turned off or the target is changed.
      */
-    fun startRamp(plan: RampPlan) {
+    fun startRamp(plan: Ramp) {
         val kind = _kind.value
-        val p = plan.fitTo(kind.minTarget / 10, kind.maxTarget / 10)
+        val p = plan.fitToRange(kind.minTarget, kind.maxTarget)
         rampJob?.cancel()
         val id = ++rampId
-        _ramp.value = RampRun(p, 0L, p.phaseAt(0L), p.targetAt(0L))
+        _ramp.value = RampRun(p, 0L, p.phaseAt(0L), p.tenthsAt(0L))
         rampJob = scope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             var sentTarget = -1
@@ -672,12 +672,12 @@ class VentyController(context: Context) {
                         _notices.tryEmit("Ramp finished, heater off")
                         break
                     }
-                    val target = p.targetAt(elapsed)
+                    val target = p.tenthsAt(elapsed)
                     _ramp.value = RampRun(p, elapsed, phase, target)
                     if (target != sentTarget || linkGeneration != sentGeneration) {
                         sentTarget = target
                         sentGeneration = linkGeneration
-                        writeRampTarget(target * 10)
+                        writeRampTarget(target)
                         if (!heaterRequested && deviceStatus?.heaterMode?.isHeating != true) {
                             heaterRequested = true
                             pendingHeater = HeaterMode.On to SystemClock.elapsedRealtime()
