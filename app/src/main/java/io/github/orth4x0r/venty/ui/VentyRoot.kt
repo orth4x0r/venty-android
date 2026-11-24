@@ -35,6 +35,7 @@ import io.github.orth4x0r.venty.ble.VentyController
 import io.github.orth4x0r.venty.ui.connect.ConnectScreen
 import io.github.orth4x0r.venty.ui.connect.PermissionScreen
 import io.github.orth4x0r.venty.ui.dashboard.DashboardScreen
+import io.github.orth4x0r.venty.ui.theme.LocalDarkMode
 import io.github.orth4x0r.venty.ui.theme.VentyColors
 
 private val requiredPermissions: Array<String> =
@@ -83,10 +84,11 @@ fun VentyRoot(controller: VentyController) {
         }
     }
 
-    // Skipped when the phone has animations turned off.
+    // Skipped in dark mode and when the phone has animations turned off.
+    val darkMode = LocalDarkMode.current
     var splash by rememberSaveable {
         mutableStateOf(
-            android.provider.Settings.Global.getFloat(
+            !darkMode && android.provider.Settings.Global.getFloat(
                 context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
             ) > 0f,
         )
@@ -111,7 +113,7 @@ fun VentyRoot(controller: VentyController) {
         AnimatedContent(
             targetState = screen,
             transitionSpec = {
-                if (targetState == Screen.Dashboard) {
+                if (targetState == Screen.Dashboard && !darkMode) {
                     // "Ignite": the dashboard swells up out of the glow as if the dial just lit.
                     (fadeIn(tween(420)) + scaleIn(spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessLow), initialScale = 0.9f)) togetherWith
                         fadeOut(tween(220))

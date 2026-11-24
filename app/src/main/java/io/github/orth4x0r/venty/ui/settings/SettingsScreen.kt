@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.BluetoothSearching
 import androidx.compose.material.icons.rounded.ColorLens
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -128,6 +129,8 @@ data class AppPrefs(
      * the device can sleep. 0 stays connected.
      */
     val idleDisconnectMinutes: Int = DEFAULT_IDLE_DISCONNECT_MIN,
+    /** A plain, still screen: the decorative animations and glows are switched off. */
+    val darkMode: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_PUFF_TARGET_S = 8
@@ -301,6 +304,15 @@ fun SettingsScreen(
 
         SectionHeader("App", Modifier.enterFromBelow(340))
         SettingsCard(Modifier.enterFromBelow(375)) {
+            SwitchRow(
+                icon = Icons.Rounded.DarkMode,
+                title = "Dark mode",
+                subtitle = "A plain, still dark screen without the glows and animations",
+                checked = appPrefs.darkMode,
+                enabled = true,
+                onChange = { onAppPrefs(appPrefs.copy(darkMode = it)) },
+            )
+            RowDivider()
             SwitchRow(
                 icon = Icons.Rounded.Palette,
                 title = "Wallpaper colors",

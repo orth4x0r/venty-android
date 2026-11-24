@@ -1,5 +1,6 @@
 package io.github.orth4x0r.venty.ui.dashboard
 
+import io.github.orth4x0r.venty.ui.theme.LocalDarkMode
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -118,7 +119,8 @@ internal fun RampCard(
 ) {
     val shown = run?.plan ?: plan
     val running = run != null
-    val glow by rememberInfiniteTransition(label = "rampGlow").animateFloat(
+    // Breathes while a ramp runs; held still in dark mode.
+    val glow = if (LocalDarkMode.current) null else rememberInfiniteTransition(label = "rampGlow").animateFloat(
         initialValue = 0.35f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
@@ -129,7 +131,7 @@ internal fun RampCard(
         backdrop = if (!running) Modifier else Modifier.drawBehind {
             drawRect(
                 Brush.radialGradient(
-                    listOf(heat.copy(alpha = 0.16f * glow), Color.Transparent),
+                    listOf(heat.copy(alpha = 0.16f * (glow?.value ?: 0.6f)), Color.Transparent),
                     center = Offset(size.width * 0.85f, 0f),
                     radius = size.width * 0.8f,
                 ),
@@ -544,7 +546,8 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
     val track = VentyColors.Track
     val total = plan.totalMs.coerceAtLeast(1L).toFloat()
     val progress = run?.let { (it.elapsedMs / total).coerceIn(0f, 1f) }
-    val pulse by rememberInfiniteTransition(label = "rampPulse").animateFloat(
+    val dark = LocalDarkMode.current
+    val pulse = if (dark) null else rememberInfiniteTransition(label = "rampPulse").animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
@@ -560,15 +563,18 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
         lastTarget = t
         if (t != null && prev != null && t > prev) {
             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            rise.snapTo(0f)
-            rise.animateTo(1f, tween(1300, easing = FastOutSlowInEasing))
+            if (!dark) {
+                rise.snapTo(0f)
+                rise.animateTo(1f, tween(1300, easing = FastOutSlowInEasing))
+            }
         }
     }
     // The staircase draws itself in from the left whenever the plan changes, so picking a profile
     // or adjusting one visibly redraws the curve rather than snapping to it. A change that lands
     // mid-draw carries on from there, so holding a +/- button doesn't keep restarting it.
-    val reveal = remember { Animatable(0f) }
+    val reveal = remember { Animatable(if (dark) 1f else 0f) }
     LaunchedEffect(plan) {
+        if (dark) { reveal.snapTo(1f); return@LaunchedEffect }
         if (reveal.value >= 1f) reveal.snapTo(0f)
         reveal.animateTo(1f, tween(750, easing = FastOutSlowInEasing))
     }
@@ -628,7 +634,10 @@ private fun RampChart(plan: RampPlan, run: RampRun?, fahrenheit: Boolean, modifi
             val dotPx = with(density) { 12.dp.toPx() }
             // Pulse ring and marker.
             Canvas(Modifier.matchParentSize()) {
-                drawCircle(heat.copy(alpha = 0.5f * (1f - pulse)), radius = dotPx * (0.6f + 1.6f * pulse), center = Offset(dotX, dotY))
+                if (pulse != null) {
+                    val p = pulse.value
+                    drawCircle(heat.copy(alpha = 0.5f * (1f - p)), radius = dotPx * (0.6f + 1.6f * p), center = Offset(dotX, dotY))
+                }
                 drawCircle(Brush.radialGradient(listOf(Color.White, ember, heat), center = Offset(dotX, dotY), radius = dotPx / 2), radius = dotPx / 2, center = Offset(dotX, dotY))
             }
             if (rise.value < 1f) {

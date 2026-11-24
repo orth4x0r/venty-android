@@ -14,6 +14,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -100,6 +101,13 @@ private val typography = base.copy(
 )
 
 /**
+ * True when the "Dark mode" setting is on: a plain, still dark screen with the decorative motion
+ * (heat haze, lava, embers, shockwaves, flashes, glows, sheens and staggered entrances) switched
+ * off. Effects read this and draw nothing, so callers don't need to check it themselves.
+ */
+val LocalDarkMode = staticCompositionLocalOf { true }
+
+/**
  * With [dynamicColor] on Android 12+, the heat accent comes from the wallpaper (Material You);
  * otherwise it's the chosen [accent], which can follow the device's body colour. State colours
  * (ready, boost, cool) stay fixed so they keep their meaning. Accent changes glide over.
@@ -109,6 +117,7 @@ fun VentyTheme(
     dynamicColor: Boolean = false,
     accent: Accent = Accent.Ember,
     deviceColor: io.github.orth4x0r.venty.ble.DeviceColor? = null,
+    darkMode: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
@@ -126,6 +135,10 @@ fun VentyTheme(
     VentyColors.Ember = ember
     MaterialTheme(colorScheme = colors(), typography = typography) {
         // There is no root Surface, so without this Text and Icon fall back to black.
-        CompositionLocalProvider(LocalContentColor provides VentyColors.OnSurface, content = content)
+        CompositionLocalProvider(
+            LocalContentColor provides VentyColors.OnSurface,
+            LocalDarkMode provides darkMode,
+            content = content,
+        )
     }
 }
