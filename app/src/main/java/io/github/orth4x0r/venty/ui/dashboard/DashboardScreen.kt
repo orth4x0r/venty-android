@@ -438,7 +438,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                                 onHistory = { openPage(Page.History) },
                                 onSettings = { openPage(Page.Settings) },
                                 updateAvailable = updateAvailable,
-                                onDisconnect = controller::disconnect,
+                                onDisconnect = controller::userDisconnect,
                                 onForget = controller::forgetDevice,
                             )
                             HeatHairline(status, live) { phaseColor }
@@ -469,7 +469,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
 
                             val s = status
                             if (s == null) {
-                                ConnectingPlaceholder(name, onCancel = controller::disconnect)
+                                ConnectingPlaceholder(name, onCancel = controller::userDisconnect)
                             } else {
                                 Dashboard(
                                     s = s,

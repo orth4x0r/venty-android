@@ -44,6 +44,11 @@ private const val DEFAULT_SECONDS_PER_DEGREE = 0.25
 private const val START_TEMP_C = 25
 private const val MAX_HISTORY = 500
 private const val MIN_SESSION_MS = 5_000L
+/**
+ * A silence longer than this means the link dropped mid-session. The session is then closed at the
+ * last status seen rather than when the link finally comes back, which could be hours later.
+ */
+internal const val SESSION_GAP_MS = 2 * 60_000L
 
 /**
  * Estimates the seconds left until the setpoint is reached. [pastRates] are earlier heat-ups in
@@ -107,6 +112,8 @@ class SessionTracker(context: Context) {
     private var stats = SessionStatsAccumulator(0L)
     private var rates: List<Double> = emptyList()
     private var seenAny = false
+    /** When the last status arrived, 0 before any. */
+    private var lastStatusMs = 0L
     private var version = 0L
     private var writtenVersion = -1L
 
@@ -117,6 +124,15 @@ class SessionTracker(context: Context) {
     fun onStatus(s: VentyStatus, nowMs: Long = System.currentTimeMillis()) {
         var save = false
         synchronized(lock) {
+            if (active && lastStatusMs > 0 && nowMs - lastStatusMs > SESSION_GAP_MS) {
+                // Back after a long silence: whatever happened in between wasn't seen, so the old
+                // session ends where the last status left it, and a new one starts if still heating.
+                endSession(lastStatusMs)
+                detector.reset()
+                seenAny = false
+                save = true
+            }
+            lastStatusMs = nowMs
             val heating = s.heaterMode.isHeating
             if (!heating) {
                 if (active) {
@@ -179,11 +195,12 @@ class SessionTracker(context: Context) {
         var save = false
         synchronized(lock) {
             if (active) {
-                endSession(nowMs)
+                endSession(if (lastStatusMs > 0 && nowMs - lastStatusMs > SESSION_GAP_MS) lastStatusMs else nowMs)
                 save = true
             }
             detector.reset()
             seenAny = false
+            lastStatusMs = 0L
         }
         if (save) save()
     }
