@@ -57,6 +57,8 @@ private const val RAMP_TICK_MS = 500L
 private const val RAMP_HEATER_ON_TIMEOUT_MS = 15_000L
 /** Direct connects tried before handing over to a background (autoConnect) request. */
 private const val DIRECT_ATTEMPTS = 2
+/** How long a finished ramp keeps trying to turn the heater off through a dropped link. */
+private const val RAMP_OFF_WAIT_MS = 5 * 60_000L
 private const val PAIRING_HOLD_MAX_MS = 3 * 60_000L
 
 data class FoundDevice(
@@ -193,9 +195,39 @@ class VentyController(context: Context) {
      * for the phone. The device is kept; opening the app or using the tile connects again.
      */
     fun idleDisconnect(minutes: Int) {
+        when (_connection.value) {
+            is ConnectionState.Idle -> return
+            is ConnectionState.Connected -> {
+                logLink("Idle for $minutes min, let go to save the ${_kind.value.displayName}'s battery")
+                // It's awake and will advertise again the moment we let go; don't jump straight back.
+                setIdleDisconnected(true)
+            }
+            else -> {
+                // Still waiting for a device that went to sleep or out of range. It isn't
+                // advertising, so no "went away" event will follow to clear the flag: setting it
+                // here would make "connect when it turns on" ignore the next real turn-on.
+                logLink("Stopped waiting for the ${_kind.value.displayName} after $minutes min")
+            }
+        }
+        disconnect()
+    }
+
+    /**
+     * True after the user tapped Disconnect, until the device goes away or the user connects
+     * again. Like [idleDisconnected], it stops "connect when it turns on" from reconnecting the
+     * moment the device advertises again, but unlike it, opening the app doesn't reconnect.
+     */
+    val userDisconnected: Boolean get() = prefs.getBoolean(KEY_USER_DISCONNECTED, false)
+
+    private fun setUserDisconnected(on: Boolean) {
+        if (userDisconnected != on) prefs.edit().putBoolean(KEY_USER_DISCONNECTED, on).apply()
+    }
+
+    /** The user's own Disconnect (dashboard menu, notification, cancel while connecting). */
+    fun userDisconnect() {
         if (_connection.value is ConnectionState.Idle) return
-        logLink("Idle for $minutes min, let go to save the ${_kind.value.displayName}'s battery")
-        setIdleDisconnected(true)
+        logLink("Disconnected by you")
+        setUserDisconnected(true)
         disconnect()
     }
 
@@ -260,6 +292,7 @@ class VentyController(context: Context) {
 
     fun connect(device: FoundDevice) {
         setIdleDisconnected(false)
+        setUserDisconnected(false)
         prefs.edit()
             .putString(KEY_ADDRESS, device.address)
             .putString(KEY_NAME, device.name)
@@ -288,9 +321,9 @@ class VentyController(context: Context) {
         when (_connection.value) {
             is ConnectionState.Connected, is ConnectionState.Connecting -> return
             else -> {
-                if (idleDisconnected) {
+                if (idleDisconnected || userDisconnected) {
                     // We just let go and it's advertising again; wait until it has been away.
-                    Log.i(TAG, "device appeared, but it was let go while idle; ignoring")
+                    Log.i(TAG, "device appeared, but it was let go on purpose; ignoring")
                     return
                 }
                 logLink("Device turned on, connecting")
@@ -304,8 +337,9 @@ class VentyController(context: Context) {
      * From now on, the next time it turns up is a real "it turned on", so connect again then.
      */
     fun onDeviceDisappeared() {
-        if (idleDisconnected) logLink("Device went to sleep")
+        if (idleDisconnected || userDisconnected) logLink("Device went to sleep")
         setIdleDisconnected(false)
+        setUserDisconnected(false)
     }
 
     /**
@@ -666,6 +700,13 @@ class VentyController(context: Context) {
                     val phase = p.phaseAt(elapsed)
                     if (phase == RampPhase.Done) {
                         Log.i(TAG, "ramp done, heater off")
+                        _ramp.value = null
+                        // With the link down right now, a plain send would be dropped and the
+                        // device would keep heating at the peak. Wait for it to come back.
+                        if (!awaitLinkUp(RAMP_OFF_WAIT_MS)) {
+                            _notices.tryEmit("Ramp finished, but the ${kind.displayName} is out of reach. Check the heater is off.")
+                            break
+                        }
                         pendingHeater = HeaterMode.Off to SystemClock.elapsedRealtime()
                         publish()
                         sendSafely(VentyProtocol.setHeaterMode(HeaterMode.Off))
@@ -707,6 +748,16 @@ class VentyController(context: Context) {
                 }
             }
         }
+    }
+
+    /** Waits until a link is up and answering, for at most [timeoutMs]. True if it is. */
+    private suspend fun awaitLinkUp(timeoutMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (link == null || deviceStatus == null || _connection.value !is ConnectionState.Connected) {
+            if (SystemClock.elapsedRealtime() >= deadline) return false
+            delay(RAMP_TICK_MS)
+        }
+        return true
     }
 
     /** Ends the ramp and leaves the heater as it is. */
@@ -805,6 +856,7 @@ class VentyController(context: Context) {
         const val KEY_NAME = "name"
         const val KEY_KIND = "kind"
         const val KEY_IDLE_DISCONNECTED = "idle_disconnected"
+        const val KEY_USER_DISCONNECTED = "user_disconnected"
     }
 }
 

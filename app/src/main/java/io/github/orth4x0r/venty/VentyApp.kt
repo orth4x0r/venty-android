@@ -109,7 +109,10 @@ class VentyApp : Application() {
             combine(controller.connection, controller.status, controller.ramp, foreground, prefs.app) { c, s, r, fg, p ->
                 val live = (c is ConnectionState.Connected && !c.demo) || c is ConnectionState.Reconnecting
                 IdleState(
-                    idle = live && !fg && r == null && s?.heaterMode?.isHeating != true,
+                    // While reconnecting, the last status is stale: a link that dropped mid-session
+                    // still says "heating", which would keep the reconnect loop running forever.
+                    idle = live && !fg && r == null &&
+                        (c !is ConnectionState.Connected || s?.heaterMode?.isHeating != true),
                     connected = c is ConnectionState.Connected,
                     minutes = p.idleDisconnectMinutes,
                 )

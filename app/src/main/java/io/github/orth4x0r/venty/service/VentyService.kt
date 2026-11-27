@@ -93,7 +93,7 @@ class VentyService : Service() {
             ACTION_TOGGLE -> controller.setHeaterMode(if (s?.heaterMode?.isHeating == true) HeaterMode.Off else HeaterMode.On)
             ACTION_BOOST -> controller.setHeaterMode(if (s?.heaterMode == HeaterMode.Boost) HeaterMode.On else HeaterMode.Boost)
             ACTION_PUMP -> controller.setPump(!controller.pump.value)
-            ACTION_DISCONNECT -> controller.disconnect()
+            ACTION_DISCONNECT -> controller.userDisconnect()
         }
         return START_NOT_STICKY
     }
